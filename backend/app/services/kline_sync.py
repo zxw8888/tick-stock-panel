@@ -297,7 +297,7 @@ def iter_daily_frames(
     start_time: datetime, end_time: datetime, asset_type: str = "stock", on_chunk_done=None,
 ):
     """只取标准日K帧, 不写正式数据、不计算指标; 调用方决定校验和发布边界。"""
-    if asset_type not in {"stock", "etf", "index"}:
+    if asset_type not in {"stock", "etf", "index", "lof"}:
         raise ValueError("不支持的日K资产类型")
     from app.data_providers import custom
 

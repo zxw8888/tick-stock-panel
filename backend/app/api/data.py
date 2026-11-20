@@ -45,7 +45,7 @@ def get_workload(request: Request) -> dict:
 
 class IntegrityScanIn(BaseModel):
     lookback_days: int = Field(default=30, ge=1, le=366)
-    asset_types: list[Literal["stock", "etf", "index"]] | None = Field(default=None, min_length=1, max_length=3)
+    asset_types: list[Literal["stock", "etf", "index", "lof"]] | None = Field(default=None, min_length=1, max_length=4)
 
 
 class IntegrityRepairIn(BaseModel):
@@ -151,7 +151,9 @@ _TABLE_TTLS = {
     name: 120.0 if name == "minute" else 30.0
     for name in (
         "daily", "enriched", "index_daily", "index_enriched", "index_instruments",
-        "etf_daily", "etf_enriched", "etf_instruments", "minute", "adj_factor",
+        "etf_daily", "etf_enriched", "etf_instruments",
+        "lof_daily", "lof_enriched", "lof_instruments",
+        "minute", "adj_factor",
         "instruments", "financials",
     )
 }
@@ -366,6 +368,44 @@ def _safe_aggregate_etf_instruments(repo) -> dict | None:
     return None
 
 
+def _safe_aggregate_lof_daily(repo) -> dict | None:
+    """LOF 日K统计 — 独立 kline_lof_daily。"""
+    return _safe_aggregate(repo, "kline_lof_daily")
+
+
+def _safe_aggregate_lof_enriched(repo) -> dict | None:
+    """LOF enriched 统计 — 独立 kline_lof_enriched。"""
+    fields = 0
+    try:
+        fields = len(repo.execute_all("DESCRIBE kline_lof_enriched"))
+    except Exception:  # noqa: BLE001
+        pass
+    stats = _safe_aggregate(repo, "kline_lof_enriched")
+    return {**stats, "fields": fields} if stats else None
+
+
+def _safe_aggregate_lof_instruments(repo) -> dict | None:
+    """LOF instruments 统计。"""
+    try:
+        row = repo.execute_one(
+            """SELECT count(*) AS rows,
+                      count(DISTINCT symbol) AS symbols,
+                      count_if(name IS NOT NULL AND name != '') AS named
+               FROM instruments_lof"""
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.debug("aggregate lof instruments failed: %s", e)
+        return None
+    if not row or not row[0]:
+        return None
+    return {
+        "rows": int(row[0]),
+        "symbols_covered": int(row[1] or 0),
+        "latest_as_of": None,
+        "named": int(row[2] or 0),
+    }
+
+
 def _safe_aggregate_etf_enriched(repo) -> dict | None:
     """ETF enriched 统计 — 独立 kline_etf_enriched。"""
     fields = 0
@@ -563,6 +603,10 @@ def _compute_storage(data_dir: Path) -> dict:
         "etf_enriched": data_dir / "kline_etf_enriched",
         "etf_instruments": data_dir / "instruments_etf",
         "etf_adj_factor": data_dir / "adj_factor_etf",
+        "lof_daily": data_dir / "kline_lof_daily",
+        "lof_enriched": data_dir / "kline_lof_enriched",
+        "lof_instruments": data_dir / "instruments_lof",
+        "lof_adj_factor": data_dir / "adj_factor_lof",
         "minute": data_dir / "kline_minute",
         "adj_factor": data_dir / "adj_factor",
         "instruments": data_dir / "instruments",
@@ -649,6 +693,9 @@ async def status(request: Request) -> dict:
         "etf_daily": _safe_aggregate_etf_daily,
         "etf_enriched": _safe_aggregate_etf_enriched,
         "etf_instruments": _safe_aggregate_etf_instruments,
+        "lof_daily": _safe_aggregate_lof_daily,
+        "lof_enriched": _safe_aggregate_lof_enriched,
+        "lof_instruments": _safe_aggregate_lof_instruments,
         "minute": _safe_aggregate_minute,
         "adj_factor": _safe_aggregate_adj_factor,
         "instruments": _safe_aggregate_instruments,
@@ -726,7 +773,8 @@ def _clear_data_impl(request: Request):
     for sub in (
         "kline_daily", "kline_daily_enriched", "kline_index_daily", "kline_index_enriched",
         "kline_etf_daily", "kline_etf_enriched", "kline_etf_minute", "kline_minute",
-        "adj_factor", "adj_factor_etf", "instruments", "instruments_index", "instruments_etf", "pools", "financials",
+        "kline_lof_daily", "kline_lof_enriched", "adj_factor_lof",
+        "adj_factor", "adj_factor_etf", "instruments", "instruments_index", "instruments_etf", "instruments_lof", "pools", "financials",
         "backtest_results", "screener_results", "ai_cache",
     ):
         d = data_dir / sub
@@ -752,7 +800,7 @@ def _clear_data_impl(request: Request):
                 publication.abandon()
             raise
 
-    clear_assets(data_dir, {"stock", "etf", "index"})
+    clear_assets(data_dir, {"stock", "etf", "index", "lof"})
     (data_dir / "user_data" / "integrity_report.json").unlink(missing_ok=True)
     # 清除同步历史（内存 + 磁盘 job_store/ 文件夹）
     from app.services.pipeline_jobs import job_store
@@ -834,6 +882,17 @@ _TABLE_FIELD_DESC: dict[str, dict[str, str]] = {
         "amount": "成交额",
     },
     "kline_etf_enriched": ENRICHED_COLUMNS,
+    "kline_lof_daily": {
+        "symbol": "LOF代码",
+        "date": "交易日期",
+        "open": "开盘价",
+        "high": "最高价",
+        "low": "最低价",
+        "close": "收盘价",
+        "volume": "成交量",
+        "amount": "成交额",
+    },
+    "kline_lof_enriched": ENRICHED_COLUMNS,
     "kline_minute": {
         "symbol": "股票代码",
         "datetime": "分钟时间戳",
@@ -883,6 +942,13 @@ _TABLE_FIELD_DESC: dict[str, dict[str, str]] = {
         "asset_type": "资产类型(etf)",
         "source": "数据源",
     },
+    "instruments_lof": {
+        "symbol": "LOF代码",
+        "name": "LOF名称",
+        "code": "LOF编码(纯数字)",
+        "asset_type": "资产类型(lof)",
+        "source": "数据源(fuyao/东财)",
+    },
 }
 
 # view 名 → DuckDB 视图名
@@ -895,6 +961,9 @@ _SCHEMA_VIEWS: dict[str, str] = {
     "etf_daily": "kline_etf_daily",
     "etf_enriched": "kline_etf_enriched",
     "etf_instruments": "instruments_etf",
+    "lof_daily": "kline_lof_daily",
+    "lof_enriched": "kline_lof_enriched",
+    "lof_instruments": "instruments_lof",
     "minute": "kline_minute",
     "adj_factor": "adj_factor",
     "instruments": "instruments",

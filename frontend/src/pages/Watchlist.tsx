@@ -285,8 +285,8 @@ function StockSearchBox({
   const [activeIdx, setActiveIdx] = useState(-1)
 
   const search = useQuery({
-    queryKey: QK.instrumentSearch(query, 'stock,etf,index'),
-    queryFn: () => api.instrumentSearch(query, 20, 'stock,etf,index'),
+    queryKey: QK.instrumentSearch(query, 'stock,etf,index,lof'),
+    queryFn: () => api.instrumentSearch(query, 20, 'stock,etf,index,lof'),
     enabled: query.trim().length > 0,
     staleTime: 30_000,
   })

@@ -18,7 +18,7 @@ const COLORS = {
 }
 
 interface Props {
-  assetType?: 'stock' | 'etf' | 'index'
+  assetType?: 'stock' | 'etf' | 'index' | 'lof'
   sessions: MinuteKlineSession[]
   height?: number
   onPriceDoubleClick?: (price: number, currentPrice: number) => void

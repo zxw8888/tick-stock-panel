@@ -4,7 +4,7 @@ import { type DailyDataRevisions, type IntegrityAsset } from '@/lib/api'
 import { useDailyIntegrity } from '@/lib/useSharedQueries'
 import { DAILY_DATA_QUERY_PREFIXES } from '@/lib/queryKeys'
 
-const LABELS: Record<IntegrityAsset, string> = { stock: '股票', etf: 'ETF', index: '指数' }
+const LABELS: Record<IntegrityAsset, string> = { stock: '股票', etf: 'ETF', index: '指数', lof: 'LOF' }
 
 export function DailyDataHealthNotice() {
   const health = useDailyIntegrity({ poll: true })

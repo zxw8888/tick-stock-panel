@@ -21,7 +21,7 @@ import {
 
 interface Props {
   symbol: string
-  onAssetType?: (assetType: 'stock' | 'etf' | 'index') => void
+  onAssetType?: (assetType: 'stock' | 'etf' | 'index' | 'lof') => void
   renderer?: ChartRenderer
   /** 详情顶栏已有名称时可隐藏报价条的重复身份；独立面板默认保留。 */
   showQuoteIdentity?: boolean

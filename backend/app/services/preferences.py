@@ -431,6 +431,11 @@ def get_pipeline_pull_index() -> bool:
     return load().get("pipeline_pull_index", True)
 
 
+def get_pipeline_pull_lof() -> bool:
+    """是否拉取 LOF 日K。默认 False(标的约 600 只,首次拉取较慢)。"""
+    return load().get("pipeline_pull_lof", False)
+
+
 def get_pipeline_regime_enabled() -> bool:
     """盘后管道是否自动计算市场环境(regime)。默认 False。
 
@@ -594,15 +599,18 @@ def set_mainline_filter_config(cfg: dict) -> dict:
     return get_mainline_filter_config()
 
 
-_PIPELINE_PULL_KEYS = ("pipeline_pull_a_share", "pipeline_pull_etf", "pipeline_pull_index")
+_PIPELINE_PULL_KEYS = (
+    "pipeline_pull_a_share", "pipeline_pull_etf", "pipeline_pull_index", "pipeline_pull_lof",
+)
 
 
 def get_pipeline_pull_types() -> dict:
-    """返回三个拉取开关的当前值。"""
+    """返回各拉取开关的当前值。"""
     return {
         "pipeline_pull_a_share": get_pipeline_pull_a_share(),
         "pipeline_pull_etf": get_pipeline_pull_etf(),
         "pipeline_pull_index": get_pipeline_pull_index(),
+        "pipeline_pull_lof": get_pipeline_pull_lof(),
     }
 
 
@@ -977,9 +985,15 @@ def get_realtime_pull_etf() -> bool:
     return load().get("realtime_pull_etf", False)
 
 
+def get_realtime_pull_lof() -> bool:
+    # LOF 实时无 TickFlow universe, 需逐标的请求(东财)或按码查询(fuyao),
+    # 默认关闭避免升级后请求量突增。
+    return load().get("realtime_pull_lof", False)
+
+
 def set_realtime_quote_scope(cfg: dict) -> dict:
     updates = {}
-    for key in ("realtime_pull_stock", "realtime_pull_etf"):
+    for key in ("realtime_pull_stock", "realtime_pull_etf", "realtime_pull_lof"):
         if key in cfg and cfg[key] is not None:
             updates[key] = bool(cfg[key])
     if updates:
@@ -991,6 +1005,7 @@ def get_realtime_quote_scope() -> dict:
     return {
         "realtime_pull_stock": get_realtime_pull_stock(),
         "realtime_pull_etf": get_realtime_pull_etf(),
+        "realtime_pull_lof": get_realtime_pull_lof(),
     }
 
 

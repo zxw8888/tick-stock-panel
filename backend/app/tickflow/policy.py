@@ -297,9 +297,15 @@ def detect_capabilities(force: bool = False) -> CapabilitySet:
     该数据集时, 补上对应能力 (见 _DATASET_CAP_MAP), 使功能不再被权限门拦。
     取数函数内部会按 preferences.get_*_data_provider() 分流到对应数据源,
     不会错误调用 TickFlow。
+
+    本地解锁: 末尾统一补授全部能力, Pro+/Expert 门控全开 (功能可用性取决于
+    数据源路由, 不再取决于 TickFlow 套餐)。grant 不覆盖已有能力, 探测出的
+    真实限额仍然保留; 新补能力 limits 全 None, resolve_limit 回退调用方默认值。
     """
     capset = _detect_tickflow_caps(force)
     _augment_custom_sources(capset)
+    for cap in Cap:
+        capset.grant(cap)
     return capset
 
 

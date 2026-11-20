@@ -64,6 +64,8 @@ class _FakeRepo:
         if asset == "index":
             idx = self._index if self._index is not None else pl.DataFrame()
             return idx, self._index_date
+        if asset == "lof":
+            return pl.DataFrame(), None
         return pl.DataFrame(), None
 
     def get_etf_symbol_set(self):
@@ -71,6 +73,9 @@ class _FakeRepo:
 
     def get_index_symbol_set(self):
         return self._index_set
+
+    def get_lof_symbol_set(self):
+        return set()
 
     def get_instruments(self):
         return self._instruments
@@ -577,7 +582,7 @@ def test_empty_watchlist_returns_no_rows(monkeypatch):
 
     res = wl_api.watchlist_enriched(_make_request(repo), ext_columns=None)
     assert res == {"rows": [], "as_of": None, "elapsed_ms": 0,
-                   "dates": {"stock": None, "etf": None, "index": None}}
+                   "dates": {"stock": None, "etf": None, "index": None, "lof": None}}
 
 
 # ===== 按资产类型行情日期 (dates) =====
@@ -600,7 +605,7 @@ def test_dates_reports_per_asset_type_quote_dates(monkeypatch):
 
     res = wl_api.watchlist_enriched(_make_request(repo), ext_columns=None)
 
-    assert res["dates"] == {"stock": "2026-10-08", "etf": "2026-09-29", "index": None}
+    assert res["dates"] == {"stock": "2026-10-08", "etf": "2026-09-29", "index": None, "lof": None}
     # 全局 as_of 取 min, 与分类型 dates 各自独立 (as_of 分不清哪类过期)
     assert res["as_of"] == "2026-09-29"
 

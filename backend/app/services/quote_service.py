@@ -331,6 +331,7 @@ class QuoteService:
         self._symbol_count: int = 0
         self._index_symbol_count: int = 0
         self._etf_symbol_count: int = 0
+        self._lof_symbol_count: int = 0
         self._index_quotes_cache: pl.DataFrame | None = None
         self._intraday_signal_evaluator = IntradaySignalEvaluator()
         self._intraday_signal_bucket: dict[str, str] = {}
@@ -696,15 +697,17 @@ class QuoteService:
         self._quote_demand.unsubscribe(client_id)
 
     def _wanted_quotes(self) -> dict[str, set[str]]:
-        result: dict[str, set[str]] = {"stock": set(), "etf": set(), "index": set()}
+        result: dict[str, set[str]] = {"stock": set(), "etf": set(), "index": set(), "lof": set()}
         if not self._repo or not getattr(self._repo, "store", None):
             return result
         wanted = self._quote_demand.symbols(self._repo.store.data_dir)
         indices = self._repo.get_index_symbol_set()
         etf = self._repo.get_etf_instruments()
         etfs = set(etf["symbol"].to_list()) if not etf.is_empty() and "symbol" in etf.columns else set()
+        lofs = self._repo.get_lof_symbol_set()
         for symbol in wanted:
-            asset = "etf" if symbol in etfs else "index" if symbol in indices else "stock"
+            # 判定顺序与 repository.resolve_asset_type 一致: etf → lof → index → stock
+            asset = "etf" if symbol in etfs else "lof" if symbol in lofs else "index" if symbol in indices else "stock"
             result[asset].add(symbol)
         return result
 
@@ -726,6 +729,7 @@ class QuoteService:
             "symbol_count": self._symbol_count,
             "index_symbol_count": self._index_symbol_count,
             "etf_symbol_count": self._etf_symbol_count,
+            "lof_symbol_count": self._lof_symbol_count,
             "quote_age_ms": round(age, 0) if age >= 0 else None,
             # 交易时段 = 连续竞价; polling_window 另行返回,避免午休/收盘缓冲误显示为交易中。
             "is_trading_hours": self._is_continuous_trading(),
@@ -889,6 +893,30 @@ class QuoteService:
                                         partial_assets.add(asset)
                                 except Exception as exc:  # noqa: BLE001 -- no cross-source fallback
                                     logger.warning("自定义源订阅行情补拉失败，保留已有数据: %s", exc)
+                    # 场内基金实时 (ETF+LOF): 场内基金快照是独立端点
+                    # ( fuyao /api/fund/market/snapshot, 文档明确覆盖 ETF+LOF ),
+                    # 不在 A 股全市场快照内, 由 lof_data 专用通道按码补拉。
+                    # 自定义源普遍未实现 get_realtime_symbols, ETF demand 补拉
+                    # 分支 (上方) 因此失效 —— 这里统一接管场内基金:
+                    #   - 自选/订阅 (demand) 始终拉取: 自选页实时不依赖开关
+                    #     (与 stock/etf demand 补拉同语义, 见 _fetch_full_market_quotes 注释);
+                    #   - realtime_pull_etf / realtime_pull_lof 开启时拉全市场集合。
+                    fund_symbols: set[str] = (set(demand["etf"]) | set(demand["lof"])) - {r.get("symbol") for r in records}
+                    if preferences.get_realtime_pull_etf() and self._repo:
+                        fund_symbols |= set(self._repo.get_etf_symbol_set())
+                    if preferences.get_realtime_pull_lof() and self._repo:
+                        fund_symbols |= self._repo.get_lof_symbol_set()
+                    fund_symbols.discard("")
+                    if fund_symbols and self._repo:
+                        from app.services import lof_data
+                        fund_quotes = lof_data.fetch_realtime(sorted(fund_symbols))
+                        if fund_quotes:
+                            records = records + fund_quotes
+                            partial_assets.add("lof")
+                            fund_etf_set = self._repo.get_etf_symbol_set()
+                            if any(r.get("symbol") in fund_etf_set for r in fund_quotes):
+                                partial_assets.add("etf")
+                            logger.info("场内基金实时行情补拉完成: %d 条 (ETF+LOF)", len(fund_quotes))
                     # 指数补充: A 股快照通常不含指数。插件可选实现
                     # get_realtime_indices(symbols) 用独立端点补拉 (如 fuyao 指数快照);
                     # 未实现的源指数缓存为空, 由日K兜底接管。
@@ -1011,6 +1039,24 @@ class QuoteService:
                         except Exception as core_exc:  # noqa: BLE001
                             logger.warning("核心指数行情拉取失败，保留上一轮数据: %s", core_exc)
                 logger.info("指数及订阅行情拉取完成: %d 只 (%.2fs)", len(_core_syms), time.perf_counter() - _i0)
+
+            # 场内基金实时 (LOF 为主): TickFlow 无 CN_LOF 池且免费档无 LOF 数据,
+            # 单独走 lof_data (fuyao 场内基金快照优先, 无 Key 回退东财 push2)。
+            # 不进 universes/targeted 批次。ETF demand 已由上方 targeted 批次覆盖,
+            # 此处只拉 LOF demand; realtime_pull_lof 开启时拉全市场集合。
+            fund_symbols = set(demand["lof"])
+            if preferences.get_realtime_pull_lof() and self._repo:
+                fund_symbols |= self._repo.get_lof_symbol_set()
+            fund_symbols.discard("")
+            if fund_symbols and self._repo:
+                from app.services import lof_data
+                fund_quotes = lof_data.fetch_realtime(sorted(fund_symbols))
+                if fund_quotes:
+                    resp.extend(fund_quotes)
+                    partial_assets.add("lof")
+                    logger.info("LOF 实时行情拉取完成: %d 条", len(fund_quotes))
+                else:
+                    logger.warning("LOF 实时行情本轮为空")
         except Exception as e:  # noqa: BLE001
             logger.warning("行情拉取失败 (%.2fs): %s", time.perf_counter() - t0, e)
             return
@@ -1089,6 +1135,7 @@ class QuoteService:
             etf_inst = self._repo.get_etf_instruments()
             if not etf_inst.is_empty() and "symbol" in etf_inst.columns:
                 all_etf_symbols = set(etf_inst["symbol"].cast(pl.Utf8).to_list())
+        all_lof_symbols = set(self._repo.get_lof_symbol_set()) if self._repo else set()
 
         if not records:
             logger.warning("行情数据为空")
@@ -1106,9 +1153,12 @@ class QuoteService:
 
         index_records = [r for r in records if r.get("symbol") in all_index_symbols]
         etf_records = [r for r in records if r.get("symbol") in all_etf_symbols]
+        lof_records = [r for r in records if r.get("symbol") in all_lof_symbols]
         stock_records = [
             r for r in records
-            if r.get("symbol") not in all_index_symbols and r.get("symbol") not in all_etf_symbols
+            if r.get("symbol") not in all_index_symbols
+            and r.get("symbol") not in all_etf_symbols
+            and r.get("symbol") not in all_lof_symbols
         ]
 
         fetch_ms = (time.perf_counter() - t0) * 1000
@@ -1121,6 +1171,7 @@ class QuoteService:
             self._fetched_at = fetched_at
             self._symbol_count = len(stock_records)
             self._etf_symbol_count = len(etf_records)
+            self._lof_symbol_count = len(lof_records)
             if replace_index_cache:
                 self._index_symbol_count = len(index_records)
                 self._index_quotes_cache = self._build_index_quotes(index_records)
@@ -1128,7 +1179,8 @@ class QuoteService:
                 logger.info("指数本轮获取失败,沿用上轮缓存: %d 只", self._index_symbol_count)
 
         _persist_last_fetch(fetched_at)
-        logger.info("行情刷新: %d 只股票, %d 只ETF, %d 只指数, 耗时 %.0fms", len(stock_records), len(etf_records), len(index_records), fetch_ms)
+        logger.info("行情刷新: %d 只股票, %d 只ETF, %d 只LOF, %d 只指数, 耗时 %.0fms",
+                    len(stock_records), len(etf_records), len(lof_records), len(index_records), fetch_ms)
 
         if confirmed_final is False:
             # 边界前的陈旧快照: 展示缓存已更新, 落盘与监控评估留待边界后快照。
@@ -1164,9 +1216,18 @@ class QuoteService:
             except Exception as e:  # noqa: BLE001
                 logger.warning("ETF 日K写盘失败: %s", e)
 
+        # ---- LOF: 按码显式拉取(部分标的) → merge 不截断分区 ----
+        lof_daily_df = self._build_daily(lof_records)
+        if not lof_daily_df.is_empty() and self._repo:
+            try:
+                self._repo.merge_live_daily_asset("lof", lof_daily_df)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("LOF 日K写盘失败: %s", e)
+
         # ---- 构建 API 直接值的补充表 (不写 daily, 只用于 enriched 计算) ----
         quote_extra = self._build_quote_extra(stock_records)
         etf_quote_extra = self._build_quote_extra(etf_records)
+        lof_quote_extra = self._build_quote_extra(lof_records)
 
         # ---- 增量计算 enriched + 写盘 + 更新缓存 ----
         if not daily_df.is_empty() and self._repo:
@@ -1175,6 +1236,8 @@ class QuoteService:
         if not etf_daily_df.is_empty() and self._repo:
             self._flush_live_enriched(etf_daily_df, etf_quote_extra, asset_type="etf",
                                       merge=bool(partial_assets and "etf" in partial_assets))
+        if not lof_daily_df.is_empty() and self._repo:
+            self._flush_live_enriched(lof_daily_df, lof_quote_extra, asset_type="lof", merge=True)
         # ---- 指数: 核心四只每轮已显式拉取, 与股票/ETF 同口径 merge 写盘 ----
         # 不能再门控 has_asset_rules("index"): 默认配置无指数监控规则, 否则
         # 盘中 kline_index_enriched 停在上一交易日, 读侧守卫直接跳过不注入。
@@ -2172,7 +2235,11 @@ class QuoteService:
                             "ok" if not live_agg.is_empty() else "空", prev_date)
 
                 cutoff = today - timedelta(days=90)
-                table = {"etf": "kline_etf_daily", "index": "kline_index_daily"}.get(asset_type, "kline_daily")
+                table = {
+                    "etf": "kline_etf_daily",
+                    "index": "kline_index_daily",
+                    "lof": "kline_lof_daily",
+                }.get(asset_type, "kline_daily")
                 daily_glob = str(self._repo.store.data_dir / table / "**" / "*.parquet")
                 ohlcv_cols = ["symbol", "date", "open", "high", "low", "close", "volume", "amount", "quote_ts"]
                 hist_df = self._etf_live_history(today, ohlcv_cols) if asset_type == "etf" else None

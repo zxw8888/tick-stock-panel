@@ -15,7 +15,7 @@ const BEAR = '#2D9B65'
 interface Props {
   freshness?: QuoteFreshness | null
   symbol: string
-  assetType?: 'stock' | 'etf' | 'index'
+  assetType?: 'stock' | 'etf' | 'index' | 'lof'
   /** 详情窗口顶栏已显示标的身份时，信息条只保留报价与指标。 */
   showIdentity?: boolean
   name?: string

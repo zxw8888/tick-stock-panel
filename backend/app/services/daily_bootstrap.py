@@ -75,8 +75,10 @@ def _ensure_history(repo, capset, symbol: str, asset_type: str, start: date, end
         raise WorkBusyError("数据源配置已变化，请重新补齐")
     repo.append_daily_asset(asset_type, raw)
     repo.append_enriched_asset(asset_type, enriched)
-    daily_table = {"stock": "kline_daily", "etf": "kline_etf_daily", "index": "kline_index_daily"}[asset_type]
-    enriched_table = {"stock": "kline_enriched", "etf": "kline_etf_enriched", "index": "kline_index_enriched"}[asset_type]
+    daily_table = {"stock": "kline_daily", "etf": "kline_etf_daily",
+                   "index": "kline_index_daily", "lof": "kline_lof_daily"}[asset_type]
+    enriched_table = {"stock": "kline_enriched", "etf": "kline_etf_enriched",
+                      "index": "kline_index_enriched", "lof": "kline_lof_enriched"}[asset_type]
     enriched_folder = "kline_daily_enriched" if asset_type == "stock" else enriched_table
     root = repo.store.data_dir.as_posix()
     repo.refresh_view(daily_table, f"{root}/{daily_table}/**/*.parquet")

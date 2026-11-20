@@ -226,12 +226,13 @@ def search_instruments(
     request: Request,
     q: str = Query("", min_length=0, max_length=50, description="搜索关键词"),
     limit: int = Query(20, ge=1, le=50),
-    asset_types: str = Query("stock", description="逗号分隔的资产类型: stock,etf"),
+    asset_types: str = Query("stock", description="逗号分隔的资产类型: stock,etf,index,lof"),
 ):
     """模糊搜索标的 (代码 / 名称)。从内存 instruments 缓存中查。
 
-    默认只搜股票, 保持既有调用方行为不变; 自选等场景传 asset_types=stock,etf
-    可一并搜出 ETF, 结果附带 asset_type 字段供前端区分。
+    默认只搜股票, 保持既有调用方行为不变; 自选等场景传
+    asset_types=stock,etf,index,lof 可一并搜出 ETF/指数/LOF,
+    结果附带 asset_type 字段供前端区分。
     """
     if not q.strip():
         return {"results": []}
@@ -618,7 +619,7 @@ def _latest_live_candle(
         if not qs:
             return None
         df_today, enriched_date = qs.get_enriched_today()
-    elif asset_type in {"etf", "index"}:
+    elif asset_type in {"etf", "index", "lof"}:
         df_today, enriched_date = request.app.state.repo.get_enriched_latest_asset(
             asset_type, refresh=refresh_asset,
         )
@@ -764,7 +765,7 @@ def get_daily_batch(request: Request, body: dict):
     sym_type = {s: repo.resolve_asset_type(s) for s in symbols}
 
     def _read_range(syms: list[str], s) -> pl.DataFrame:
-        stock_syms = [x for x in syms if sym_type[x] not in ("etf", "index")]
+        stock_syms = [x for x in syms if sym_type[x] not in ("etf", "index", "lof")]
         frames: list[pl.DataFrame] = []
         if stock_syms:
             df_stock = repo.get_daily_batch(stock_syms, s, end, columns=cols)
@@ -777,6 +778,10 @@ def get_daily_batch(request: Request, body: dict):
                     frames.append(sub)
             elif sym_type[x] == "index":
                 sub = repo.get_index_daily(x, s, end, columns=cols)
+                if not sub.is_empty():
+                    frames.append(sub)
+            elif sym_type[x] == "lof":
+                sub = repo.get_lof_daily(x, s, end, columns=cols)
                 if not sub.is_empty():
                     frames.append(sub)
         if not frames:

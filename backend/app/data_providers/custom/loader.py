@@ -174,6 +174,15 @@ def install_plugin(name: str) -> tuple[bool, str]:
     返回 (是否成功, 消息)。成功后调用方应 reload 重新扫描。
     依赖未找到 (npm/pip 缺失) 或命令失败时返回 False。
     """
+    # 桌面版 (PyInstaller onedir) 的依赖已全部打进包: pytdx / tdxaidata 及其
+    # 原生库都在 _internal 内。此时 sys.executable 是 TSP.exe 本身,
+    # `TSP.exe -m pip ...` / `uv pip install --python TSP.exe` 只会重启应用或
+    # 报"找不到解释器" — 绝不能走下面的 pip 分支, 直接告知依赖已内置。
+    import sys
+
+    if getattr(sys, "frozen", False):
+        return True, "桌面版已内置插件依赖，无需安装；如插件仍不可用，请检查网络或凭据配置"
+
     manifest = plugin_manifest(name)
     if manifest is None:
         return False, f"插件 '{name}' 不存在或无 plugin.yaml"
@@ -258,6 +267,13 @@ def uninstall_plugin(name: str) -> tuple[bool, str]:
     node 型: 删除 node_modules 目录 (干净彻底, 下次需要重新 npm install)。
     python 型: pip uninstall (包名从 requirements.txt 推断)。
     """
+    import sys as _sys
+
+    # 与 install_plugin 的 frozen 保护对应: 桌面版依赖随包分发, 不存在可卸载的
+    # pip 环境, 更不能拿 TSP.exe 当解释器执行 `uninstall`。
+    if getattr(_sys, "frozen", False):
+        return True, "桌面版插件依赖随客户端分发，无需卸载"
+
     import shutil as _shutil
 
     manifest = plugin_manifest(name)

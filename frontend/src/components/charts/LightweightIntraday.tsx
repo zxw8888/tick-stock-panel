@@ -12,7 +12,7 @@ import type { AnnotationData } from './ChartAnnotations'
 
 interface Props {
   symbol: string
-  assetType?: 'stock' | 'etf' | 'index'
+  assetType?: 'stock' | 'etf' | 'index' | 'lof'
   data?: MinuteKlineRow[]
   sessions?: MinuteKlineSession[]
   date?: string

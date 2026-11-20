@@ -84,7 +84,7 @@ def client(tmp_path, monkeypatch):
         store=SimpleNamespace(data_dir=tmp_path, db=None),
         get_enriched_latest=lambda: (snapshot, _DAY),
         get_enriched_latest_asset=lambda _: (pl.DataFrame(), None),
-        get_etf_symbol_set=set, get_index_symbol_set=set,
+        get_etf_symbol_set=set, get_index_symbol_set=set, get_lof_symbol_set=set,
         get_instruments=pl.DataFrame,
         get_name_map=lambda _: dict(zip(symbols, ["涨停样例", "跌停样例"], strict=True)),
     )

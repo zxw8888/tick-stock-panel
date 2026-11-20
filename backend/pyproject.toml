@@ -28,6 +28,8 @@ dependencies = [
     "tickflow[all]>=0.1.23",
     # TdxQuant 内置数据源插件的原生 TCP 客户端 (wheel 自带跨平台库, 无需系统依赖)
     "tdxaidata>=1.2.2",
+    # freetdx 内置免费数据源插件 (通达信公网行情, 纯 Python, 无 Key)
+    "pytdx>=1.72",
     # Scheduling
     "apscheduler>=3.10",
     # Config

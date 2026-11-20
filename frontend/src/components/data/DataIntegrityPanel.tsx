@@ -6,6 +6,7 @@ import { QK } from '@/lib/queryKeys'
 
 const ASSETS: { id: IntegrityAsset; label: string }[] = [
   { id: 'stock', label: '股票' }, { id: 'etf', label: 'ETF' }, { id: 'index', label: '指数' },
+  { id: 'lof', label: 'LOF' },
 ]
 
 export function DataIntegrityPanel({ hasCap, isRunning, job, defaultAssets, onStart }: {

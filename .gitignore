@@ -88,6 +88,10 @@ docs/zhihu/
 # ===== 用户自定义策略(私有,不开源) =====
 data/strategies/custom/
 
+# ===== 测试产生的数据垃圾 =====
+backend/MagicMock/
+data_src_test/
+
 # ===== 临时 / 调试产物 =====
 backend._recheck*.py
 backend/_verify*.py

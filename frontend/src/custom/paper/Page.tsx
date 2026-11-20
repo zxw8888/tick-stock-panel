@@ -650,8 +650,8 @@ function OrderForm({ acc, holdings = [], onDone }: { acc: string; holdings?: Pap
 
   // 标的联想: 代码 / 中文名 / 拼音首字母, 与自选搜索同一后端 (ETF 可一并搜出)
   const symbolSearch = useQuery({
-    queryKey: QK.instrumentSearch(symbol.trim(), 'stock,etf'),
-    queryFn: () => api.instrumentSearch(symbol.trim(), 20, 'stock,etf'),
+    queryKey: QK.instrumentSearch(symbol.trim(), 'stock,etf,lof'),
+    queryFn: () => api.instrumentSearch(symbol.trim(), 20, 'stock,etf,lof'),
     enabled: symbol.trim().length > 0,
     staleTime: 30_000,
   })

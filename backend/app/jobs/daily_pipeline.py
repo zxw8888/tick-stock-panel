@@ -242,6 +242,7 @@ def run_now(
     stale_day: _date | None = None
     etf_stale_day: _date | None = None
     index_stale_day: _date | None = None
+    lof_stale_day: _date | None = None
     if override_start_date is None:
         try:
             from app.services import data_integrity
@@ -253,6 +254,7 @@ def run_now(
                 stale_day = data_integrity.earliest_issue_day(integrity_issues, ("kline_daily",))
                 etf_stale_day = data_integrity.earliest_issue_day(integrity_issues, ("kline_etf_daily",))
                 index_stale_day = data_integrity.earliest_issue_day(integrity_issues, ("kline_index_daily",))
+                lof_stale_day = data_integrity.earliest_issue_day(integrity_issues, ("kline_lof_daily",))
                 logger.warning(
                     "integrity: 检测到 %d 个不完整分区(%s), 本次管道改走范围拉取修复",
                     len(integrity_issues), data_integrity.describe_issues(integrity_issues),
@@ -546,6 +548,7 @@ def run_now(
     etf_adj_symbols = 0
     pull_index = _prefs.get_pipeline_pull_index()
     pull_etf = _prefs.get_pipeline_pull_etf()
+    pull_lof = _prefs.get_pipeline_pull_lof()
 
     from app.data_providers import custom as custom_sources
     daily_provider = _prefs.get_daily_data_provider()
@@ -666,6 +669,48 @@ def run_now(
             stage_errors.append(f"index/etf sync: {e}")
     else:
         skipped.append("sync_index")
+
+    # Step 2.4: LOF 同步 — 独立 try 块(#540 教训: 指数/ETF 失败不得连坐 LOF)。
+    # LOF 走东财日K/fuyao 维表, 与 TickFlow 能力探测无关, 故不纳入上面的 daily_allowed 门控。
+    written_lof_daily = 0
+    lof_count = 0
+    if pull_lof:
+        try:
+            emit("sync_index", 88, "同步 LOF 维表…")
+            lof_count = index_sync.sync_lof_instruments(repo)
+            emit("sync_index", 88, f"LOF 维表完成,{lof_count} 只")
+            lof_dir = repo.store.data_dir / "kline_lof_enriched"
+            lof_dates = sorted(
+                dp.name[5:] for dp in lof_dir.glob("date=*")
+                if dp.is_dir() and dp.name.startswith("date=")
+            ) if lof_dir.exists() else []
+            if override_start_date is not None:
+                lof_start = override_start_date
+            else:
+                lof_start = _date.fromisoformat(lof_dates[-1]) if lof_dates else today - _td(days=365)
+            # 完整性修复时起点提前到最早坏日(实时写过今天分区时不能跳过缺口)
+            if lof_stale_day is not None and lof_start > lof_stale_day:
+                lof_start = lof_stale_day
+
+            def _lof_chunk(cur: int, tot: int) -> None:
+                emit("sync_index", 88, f"LOF 日K批次 {cur}/{tot}",
+                     stage_pct=int(100 * cur / tot) if tot else 100, skip_log=cur < tot)
+
+            written_lof_daily = index_sync.sync_and_persist_lof_daily(
+                repo,
+                start_date=_dt.combine(lof_start, _dt.min.time()),
+                end_date=_dt.combine(today, _dt.min.time()),
+                on_chunk_done=_lof_chunk,
+            )
+            emit("sync_index", 88, f"LOF 日K完成,{written_lof_daily} 行")
+            _invalidate("lof_instruments")
+            _invalidate("lof_daily")
+        except Exception as e:  # noqa: BLE001
+            logger.warning("sync_lof failed: %s", e)
+            emit("sync_index", 89, f"LOF同步失败:{e}")
+            stage_errors.append(f"LOF sync: {e}")
+    else:
+        skipped.append("sync_lof")
 
     # Step 2.5: 分钟 K 同步(可选) — 未启用或无 capability 时静默跳过(不 emit)
     from app.services import preferences
@@ -978,12 +1023,16 @@ def _refresh_single_view(repo: KlineRepository, name: str) -> None:
         "kline_etf_daily": f"{d}/kline_etf_daily/**/*.parquet",
         "kline_etf_enriched": f"{d}/kline_etf_enriched/**/*.parquet",
         "kline_etf_minute": f"{d}/kline_etf_minute/**/*.parquet",
+        "kline_lof_daily": f"{d}/kline_lof_daily/**/*.parquet",
+        "kline_lof_enriched": f"{d}/kline_lof_enriched/**/*.parquet",
+        "adj_factor_lof": f"{d}/adj_factor_lof/**/*.parquet",
         "kline_minute": f"{d}/kline_minute/**/*.parquet",
         "adj_factor": f"{d}/adj_factor/**/*.parquet",
         "adj_factor_etf": f"{d}/adj_factor_etf/**/*.parquet",
         "instruments": f"{d}/instruments/**/*.parquet",
         "instruments_index": f"{d}/instruments_index/**/*.parquet",
         "instruments_etf": f"{d}/instruments_etf/**/*.parquet",
+        "instruments_lof": f"{d}/instruments_lof/**/*.parquet",
     }
     path = paths.get(name)
     if not path:
@@ -1443,6 +1492,26 @@ def start_scheduler(repo: KlineRepository, capset: CapabilitySet) -> AsyncIOSche
         _register_review_job(scheduler, repo, review_sched["hour"], review_sched["minute"])
         logger.info("scheduled_review enabled @%02d:%02d mon-fri",
                     review_sched["hour"], review_sched["minute"])
+
+    # LOF 净值(NAV)同步: 工作日 20:30, 走 fuyao 扩展数据通道。
+    # NAV T+1 披露, 今晚拉到的通常还是上一净值日; job 幂等(按净值日 merge-upsert)。
+    # 未配置 FUYAO_API_KEY 时 lof_data.fetch_nav 返回空, 本 job 静默跳过, 不写脏数据。
+    def _lof_nav_task() -> None:
+        try:
+            from app.services import lof_nav_service
+            written = lof_nav_service.sync_nav(repo.store.data_dir)
+            if written:
+                logger.info("LOF NAV 定时同步完成: %d 行", written)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("LOF NAV 定时同步失败: %s", e)
+
+    scheduler.add_job(
+        _lof_nav_task,
+        trigger=CronTrigger(hour=20, minute=30, day_of_week="mon-fri"),
+        id="lof_nav_sync",
+        misfire_grace_time=3600,
+        replace_existing=True,
+    )
 
     scheduler.start()
     logger.info("scheduler started; instruments@%02d:%02d, pipeline@%02d:%02d, depth@%02d:%02d mon-fri",

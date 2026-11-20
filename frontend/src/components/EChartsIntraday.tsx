@@ -19,7 +19,7 @@ const THEME = {
 }
 
 interface Props {
-  assetType?: 'stock' | 'etf' | 'index'
+  assetType?: 'stock' | 'etf' | 'index' | 'lof'
   data: MinuteKlineRow[]
   height?: number
   prevClose?: number

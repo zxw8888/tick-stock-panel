@@ -105,6 +105,9 @@ def test_index_live_write_without_monitor_rules(monkeypatch) -> None:
         def get_etf_instruments(self):
             return pl.DataFrame()
 
+        def get_lof_symbol_set(self) -> set:
+            return set()
+
         def flush_live_daily(self, df) -> None:
             return None
 

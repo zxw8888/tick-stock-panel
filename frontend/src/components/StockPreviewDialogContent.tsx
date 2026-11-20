@@ -117,9 +117,9 @@ export function StockPreviewDialogContent({ symbol, name, onClose, triggerInfo, 
   const [showMonitorEditor, setShowMonitorEditor] = useState(false)
   const customNames = useCustomSignalNames()
   const [priceAlertDraft, setPriceAlertDraft] = useState<PriceAlertDraft | null>(null)
-  const [assetInfo, setAssetInfo] = useState<{ symbol: string; type: 'stock' | 'etf' | 'index' } | null>(null)
+  const [assetInfo, setAssetInfo] = useState<{ symbol: string; type: 'stock' | 'etf' | 'index' | 'lof' } | null>(null)
   const assetType = assetInfo?.symbol === symbol ? assetInfo.type : undefined
-  const handleAssetType = useCallback((type: 'stock' | 'etf' | 'index') => {
+  const handleAssetType = useCallback((type: 'stock' | 'etf' | 'index' | 'lof') => {
     if (symbol) setAssetInfo({ symbol, type })
   }, [symbol])
   const [maximized, setMaximized] = useState(false)

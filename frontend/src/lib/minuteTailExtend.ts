@@ -26,6 +26,7 @@ export type TailExtendQuoteDates = {
   stock?: string | null
   etf?: string | null
   index?: string | null
+  lof?: string | null
 }
 
 /** 连续竞价时段 (9:31-11:30, 13:01-15:00); 收盘后 rt 价即收盘价无需续写 */

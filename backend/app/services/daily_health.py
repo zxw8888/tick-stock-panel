@@ -15,7 +15,7 @@ from pathlib import Path
 from app.enriched_generation import EnrichedGenerationUnavailableError
 from app.services.fs_utils import atomic_write_text
 
-ASSET_LABELS = {"stock": "股票", "etf": "ETF", "index": "指数"}
+ASSET_LABELS = {"stock": "股票", "etf": "ETF", "index": "指数", "lof": "LOF"}
 _LOCK = threading.RLock()
 
 

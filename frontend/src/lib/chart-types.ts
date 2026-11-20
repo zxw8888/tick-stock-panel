@@ -66,7 +66,7 @@ export interface VolumeCompareConfig {
 
 export interface DailyChartProps {
   data: OHLC[]
-  assetType?: 'stock' | 'etf' | 'index'
+  assetType?: 'stock' | 'etf' | 'index' | 'lof'
   markers?: ChartMarker[]
   ranges?: ChartRange[]
   priceLines?: ChartPriceLine[]

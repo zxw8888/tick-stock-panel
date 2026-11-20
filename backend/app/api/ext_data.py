@@ -508,6 +508,22 @@ def _granularity_effective(config: ExtConfig, data_dir: Path) -> str | None:
     return stats["granularity"]
 
 
+@router.post("/lof-nav/sync")
+def sync_lof_nav(request: Request, symbols: list[str] | None = None):
+    """同步 LOF 净值到 fund_nav 扩展表(fuyao /api/fund/performance/nav)。
+
+    symbols=None 时取 LOF 维表全量; 需配置 FUYAO_API_KEY。
+    净值 T+1 披露, 按净值日分区写入, 重复调用幂等(merge-upsert)。
+    """
+    from app.services import lof_nav_service
+
+    try:
+        written = lof_nav_service.sync_nav(_data_dir(request), symbols)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"LOF NAV 同步失败: {e}") from e
+    return {"table": lof_nav_service.TABLE_ID, "written": written}
+
+
 @router.get("")
 def list_configs(request: Request):
     """列出所有扩展数据配置。"""

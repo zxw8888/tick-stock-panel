@@ -7,7 +7,7 @@ import { QK } from '@/lib/queryKeys'
 import { boardTag } from '@/components/stock-table/primitives'
 
 interface Props {
-  onSelect: (symbol: string, name: string) => void
+  onSelect: (symbol: string, name: string, assetType?: string) => void
   /** 搜索资产类型, 逗号分隔 (默认 'stock')。如 'stock,index' */
   assetTypes?: string
 }
@@ -44,8 +44,8 @@ export function StockFinancialSearch({ onSelect, assetTypes }: Props) {
     return () => document.removeEventListener('mousedown', handleClick)
   }, [])
 
-  function handleSelect(r: { symbol: string; name: string }) {
-    onSelect(r.symbol, r.name)
+  function handleSelect(r: { symbol: string; name: string; asset_type?: string }) {
+    onSelect(r.symbol, r.name, r.asset_type)
     setQuery('')
     setOpen(false)
     setActiveIdx(-1)
@@ -127,6 +127,9 @@ export function StockFinancialSearch({ onSelect, assetTypes }: Props) {
                   })()}
                   {r.asset_type === 'index' && (
                     <span className="shrink-0 px-1 py-0.5 rounded text-[10px] leading-none bg-sky-500/10 text-sky-400">指数</span>
+                  )}
+                  {r.asset_type === 'lof' && (
+                    <span className="shrink-0 px-1 py-0.5 rounded text-[10px] leading-none bg-violet-500/10 text-violet-400">LOF</span>
                   )}
                   {r.code && <span className="text-[10px] text-muted font-mono shrink-0">{r.code}</span>}
                 </button>

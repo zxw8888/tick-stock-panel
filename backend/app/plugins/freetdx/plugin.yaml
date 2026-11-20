@@ -1,0 +1,32 @@
+# freetdx — 通达信公网免费数据源 (pytdx + 腾讯快照, 零费用无 Key)
+#
+# 2026-11 实测: 通达信公网 hq 服务器已限制 bars/quotes/list 命令(返回拒绝码),
+# 但历史分时 get_history_minute_time_data(含当日实时)仍开放 — 以「分时转 1 分钟K」
+# 提供分钟数据; 五档盘口走腾讯免费 HTTP 快照。全部数据无需 Key、无需注册。
+
+name: freetdx
+display_name: "通达信免费源 (pytdx)"
+runtime: python
+entry: app.plugins.freetdx.provider:FreetdxProvider
+check: app.plugins.freetdx.provider:availability
+datasets: [minute, depth5, full_minute]
+install_hint: "pip install pytdx"
+description: |
+  免费数据源(无需 Key): 通达信公网行情服务器(pytdx)提供分钟K与全量分钟,
+  腾讯免费快照提供五档盘口。
+
+  数据口径说明: 分钟K由通达信**分时数据转换**(每分钟一个价点, OHLC 相等即
+  分钟收盘价线, 无影线; 成交额按 price×volume×100 推导), 适合分时查看 /
+  盘中信号 / 分钟回测, 与逐笔成交流的分钟K存在微小口径差异。
+
+  覆盖范围: 沪深股票 / ETF / 指数(上证指数走 999999 别名); 北交所不支持。
+  分钟历史深度约 120 交易日(实测约半年)。全量分钟仅修复轮(约 60s 节奏,
+  无秒级增量)。五档盘口为实时快照, 盘后为最后盘口快照。
+
+  服务器可用性依赖通达信公网行情集群, 若全部不可达本源自动灰显回退。
+usage_notes:
+  - "分钟K: 240 根/日, 历史深度约 120 交易日, 逐标的请求(多连接并发)"
+  - "全量分钟: 仅修复轮, 全市场一轮约 2-5 分钟量级(取决于服务器响应)"
+  - "五档盘口: 腾讯快照 60 只/批, 与 realtime 数据源无关"
+homepage: "https://github.com/rainx/pytdx"
+homepage_label: "pytdx 项目"

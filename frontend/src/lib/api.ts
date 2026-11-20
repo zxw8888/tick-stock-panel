@@ -331,7 +331,7 @@ export interface QuoteFreshness {
 
 export interface KlineDailyResponse {
   symbol: string
-  asset_type?: 'stock' | 'etf' | 'index'
+  asset_type?: 'stock' | 'etf' | 'index' | 'lof'
   name?: string
   stock_info?: { name?: string; total_shares?: number; float_shares?: number; ext?: Record<string, unknown> }
   rows: KlineRow[]
@@ -341,7 +341,7 @@ export interface KlineDailyResponse {
 
 export interface KlineDailyLatestResponse {
   symbol: string
-  asset_type?: 'stock' | 'etf' | 'index'
+  asset_type?: 'stock' | 'etf' | 'index' | 'lof'
   row: KlineRow | null
   source: 'live' | 'none'
   quote_freshness?: QuoteFreshness | null
@@ -1150,7 +1150,7 @@ export interface MonitorRule {
   name: string
   enabled: boolean
   type: 'strategy' | 'signal' | 'price' | 'market' | 'ladder' | 'sector' | 'abnormal' | 'volume_delta' | 'date'
-  asset_type?: 'stock' | 'etf' | 'index'
+  asset_type?: 'stock' | 'etf' | 'index' | 'lof'
   scope: 'symbols' | 'all' | 'sector' | 'watchlist_group'
   symbols: string[]
   /** scope=watchlist_group 时绑定的自选分组 id (成员动态解析, 增删自选自动生效) */
@@ -2481,9 +2481,11 @@ export interface Preferences {
   daily_batch_compress: boolean
   realtime_pull_stock?: boolean
   realtime_pull_etf?: boolean
+  realtime_pull_lof?: boolean
   pipeline_pull_a_share: boolean
   pipeline_pull_etf: boolean
   pipeline_pull_index: boolean
+  pipeline_pull_lof: boolean
   pipeline_regime_enabled: boolean
   regime_batch_days: number
   regime_warmup_days: number
@@ -3084,11 +3086,12 @@ export const api = {
       limit?: number
     }>(`/api/kline/minute-gaps${qs ? `?${qs}` : ''}`)
   },
-  updatePipelinePullTypes: (cfg: Partial<Pick<Preferences, 'pipeline_pull_a_share' | 'pipeline_pull_etf' | 'pipeline_pull_index'>>) =>
+  updatePipelinePullTypes: (cfg: Partial<Pick<Preferences, 'pipeline_pull_a_share' | 'pipeline_pull_etf' | 'pipeline_pull_index' | 'pipeline_pull_lof'>>) =>
     request<{
       pipeline_pull_a_share: boolean
       pipeline_pull_etf: boolean
       pipeline_pull_index: boolean
+      pipeline_pull_lof: boolean
     }>('/api/settings/preferences/pipeline-pull-types', {
       method: 'PUT',
       body: JSON.stringify(cfg),
@@ -3113,7 +3116,7 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ realtime_quotes_enabled: enabled }),
     }),
-  updateRealtimeQuoteScope: (cfg: Partial<Pick<Preferences, 'realtime_pull_stock' | 'realtime_pull_etf'>>) =>
+  updateRealtimeQuoteScope: (cfg: Partial<Pick<Preferences, 'realtime_pull_stock' | 'realtime_pull_etf' | 'realtime_pull_lof'>>) =>
     request<Partial<Preferences>>('/api/settings/preferences/realtime-quote-scope', {
       method: 'PUT',
       body: JSON.stringify(cfg),
@@ -3434,7 +3437,7 @@ export const api = {
       /** local_partial 时: 该交易日应有根数 / 实有根数 */
       expected?: number
       actual?: number
-      asset_type?: 'stock' | 'etf' | 'index'
+      asset_type?: 'stock' | 'etf' | 'index' | 'lof'
       price_limit?: PriceLimitInfo | null
       prev_close?: number | null
     }>(
@@ -3444,7 +3447,7 @@ export const api = {
     request<{
       symbol: string
       name?: string
-      asset_type: 'stock' | 'etf' | 'index'
+      asset_type: 'stock' | 'etf' | 'index' | 'lof'
       requested_days: number
       sessions: MinuteKlineSession[]
       source: 'local' | 'none'
@@ -3630,7 +3633,7 @@ export const api = {
       as_of: string | null
       elapsed_ms: number
       /** 按资产类型的行情日期 (ISO); 缺失 (旧后端) 时前端按不新鲜处理 */
-      dates?: { stock: string | null; etf: string | null; index: string | null }
+      dates?: { stock: string | null; etf: string | null; index: string | null; lof?: string | null }
     }>(
       extColumns
         ? `/api/watchlist/enriched?ext_columns=${encodeURIComponent(extColumns)}`
@@ -3643,7 +3646,7 @@ export const api = {
   dataVersions: () => request<{ versions: Record<string, string> }>('/api/intraday/data-versions', { quiet: true }),
 
   // timeframe='all' 时不传参数 → 后端不过滤周期, 返回日线+分钟合并列表
-  screenerStrategies: async (assetType?: 'stock' | 'etf' | 'index', timeframe: '1d' | '1m' | 'all' = '1d') => {
+  screenerStrategies: async (assetType?: 'stock' | 'etf' | 'index' | 'lof', timeframe: '1d' | '1m' | 'all' = '1d') => {
     const data = await request<{
       strategies: StrategyDetail[]
       load_errors?: StrategyLoadError[]
@@ -3769,7 +3772,7 @@ export const api = {
     stop_loss_pct?: number
     max_hold_days?: number
     matching?: 'close_t' | 'open_t+1'
-    asset_type?: 'stock' | 'etf' | 'index'
+    asset_type?: 'stock' | 'etf' | 'index' | 'lof'
   }) =>
     request<BacktestResult>('/api/backtest/run', {
       method: 'POST',
@@ -3870,7 +3873,7 @@ export const api = {
     weight?: 'equal' | 'factor_weight'
     fees_pct?: number
     slippage_bps?: number
-    asset_type?: 'stock' | 'etf' | 'index'
+    asset_type?: 'stock' | 'etf' | 'index' | 'lof'
   }) =>
     request<FactorBacktestResult>('/api/backtest/factor/run', {
       method: 'POST',
@@ -3888,7 +3891,7 @@ export const api = {
     weight?: 'equal' | 'factor_weight'
     fees_pct?: number
     slippage_bps?: number
-    asset_type?: 'stock' | 'etf' | 'index'
+    asset_type?: 'stock' | 'etf' | 'index' | 'lof'
   }, signal?: AbortSignal) =>
     request<FactorBatchResult>('/api/backtest/factor/batch', {
       method: 'POST',
@@ -4021,7 +4024,7 @@ export const api = {
     position_sizing?: 'equal' | 'score_weight' | 'policy'
     position_policy?: string | null
     position_policy_params?: Record<string, number | boolean | string> | null
-    asset_type?: 'stock' | 'etf' | 'index'
+    asset_type?: 'stock' | 'etf' | 'index' | 'lof'
     minute_fill?: boolean
   }) =>
     request<StrategyBacktestResult>('/api/backtest/strategy/run', {
@@ -4059,6 +4062,17 @@ export const api = {
 
   pipelineRun: () => request<{ job_id: string; reused: boolean }>(
     '/api/pipeline/run', { method: 'POST' },
+  ),
+  /** 单标的长时间 / 分钟K同步，与盘后管道共用任务槽与进度轮询 */
+  symbolSync: (body: {
+    symbol: string
+    asset_type?: IntegrityAsset
+    granularity: 'daily' | 'minute'
+    range: 'custom' | 'full'
+    start_date?: string
+    end_date?: string
+  }) => request<{ job_id: string; reused: boolean }>(
+    '/api/pipeline/symbol-sync', { method: 'POST', body: JSON.stringify(body) },
   ),
   /** 独立同步除权因子 (全历史 + 受影响个股 enriched 局部重算), 与管道共用任务槽 */
   pipelineAdjFactorRun: () => request<{ job_id: string; reused: boolean }>(
@@ -5261,6 +5275,18 @@ export interface PipelineJob {
     remaining_gaps?: number
     minute_rows?: number
     skipped_stages?: string[]
+    // 单标的同步结果
+    symbol?: string
+    asset_type?: IntegrityAsset
+    granularity?: 'daily' | 'minute'
+    range_mode?: 'custom' | 'full'
+    requested?: { start: string | null; end: string | null }
+    actual?: { start: string | null; end: string | null }
+    written_rows?: number
+    windows_fetched?: number
+    truncated?: boolean
+    warnings?: string[]
+    refreshed_views?: string[]
   } | null
   error: string | null
 }
@@ -5268,7 +5294,7 @@ export interface PipelineJob {
 export type PipelineJobSummary = Omit<PipelineJob, 'log'>
 
 // ===== Data status =====
-export type IntegrityAsset = 'stock' | 'etf' | 'index'
+export type IntegrityAsset = 'stock' | 'etf' | 'index' | 'lof'
 export type DailyDataRevisions = Partial<Record<IntegrityAsset, string>>
 
 export interface IntegrityReport {
@@ -5323,6 +5349,9 @@ export interface DataStatus {
   etf_daily: TableStats | null
   etf_enriched: TableStats | null
   etf_instruments: InstrumentsStats | null
+  lof_daily: TableStats | null
+  lof_enriched: TableStats | null
+  lof_instruments: InstrumentsStats | null
   minute: TableStats | null
   adj_factor: TableStats | null
   instruments: InstrumentsStats | null

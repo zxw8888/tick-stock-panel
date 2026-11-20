@@ -274,8 +274,8 @@ function LotDialog({ lot, onClose }: { lot: Lot; onClose: () => void }) {
   })
 
   const symbolSearch = useQuery({
-    queryKey: QK.instrumentSearch(symbolQuery, 'stock,etf'),
-    queryFn: () => api.instrumentSearch(symbolQuery, 20, 'stock,etf'),
+    queryKey: QK.instrumentSearch(symbolQuery, 'stock,etf,lof'),
+    queryFn: () => api.instrumentSearch(symbolQuery, 20, 'stock,etf,lof'),
     enabled: symbolQuery.trim().length > 0,
   })
 

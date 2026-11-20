@@ -49,14 +49,15 @@ SCAN_WINDOW_DAYS = 7
 # 自动修复窗口: 最早坏日距今超过 N 个自然日 → 只报告不自动修 (更大缺口由用户手动 repair)
 AUTO_REPAIR_MAX_LAG_DAYS = 5
 
-# 参与检测的日K族表 (实时 flush 会写这三族的 daily/enriched)
-_DAILY_TABLES = ("kline_daily", "kline_etf_daily", "kline_index_daily")
+# 参与检测的日K族表 (实时 flush 会写这四族 daily/enriched)
+_DAILY_TABLES = ("kline_daily", "kline_etf_daily", "kline_index_daily", "kline_lof_daily")
 
 # 表 → 资产族 (用于管道/修复侧按族取起点)
 TABLE_FAMILY = {
     "kline_daily": "stock",
     "kline_etf_daily": "etf",
     "kline_index_daily": "index",
+    "kline_lof_daily": "lof",
 }
 
 
@@ -73,15 +74,20 @@ class IntegrityIssue:
 
 
 def active_daily_tables() -> tuple[str, ...]:
-    """自动检查只覆盖当前实际启用的资产族, 显式自检可另选范围。"""
+    """自动检查只覆盖当前实际启用的资产族, 显式自检可另选范围。
+
+    由 TABLE_FAMILY 驱动, 不再按位置 zip 偏好开关: 新增资产族时只要表映射和
+    下面的开关同步即可, 不会因为两个元组长度不一致触发 strict zip 崩溃。
+    """
     from app.services import preferences
 
-    enabled = (
-        preferences.get_pipeline_pull_a_share() or preferences.get_realtime_pull_stock(),
-        preferences.get_pipeline_pull_etf() or preferences.get_realtime_pull_etf(),
-        preferences.get_pipeline_pull_index(),
-    )
-    return tuple(table for table, on in zip(_DAILY_TABLES, enabled, strict=True) if on)
+    enabled = {
+        "stock": preferences.get_pipeline_pull_a_share() or preferences.get_realtime_pull_stock(),
+        "etf": preferences.get_pipeline_pull_etf() or preferences.get_realtime_pull_etf(),
+        "index": preferences.get_pipeline_pull_index(),
+        "lof": preferences.get_pipeline_pull_lof() or preferences.get_realtime_pull_lof(),
+    }
+    return tuple(table for table, family in TABLE_FAMILY.items() if enabled.get(family, False))
 
 
 DAILY_REQUIRED = ("symbol", "date", "open", "high", "low", "close", "volume")
@@ -597,6 +603,7 @@ def describe_issues(issues: list[IntegrityIssue]) -> str:
         "kline_daily": "股票日K",
         "kline_etf_daily": "ETF日K",
         "kline_index_daily": "指数日K",
+        "kline_lof_daily": "LOF日K",
     }
     groups: dict[tuple[str, str], set[date]] = {}
     for issue in issues:

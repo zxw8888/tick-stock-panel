@@ -32,6 +32,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import math
+import sys
 import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
@@ -94,17 +95,25 @@ def get_api_key() -> str:
 
 
 def _module_available() -> bool:
-    try:
-        import importlib.util
+    """用真实 import 判定, 而非 find_spec。
 
-        return importlib.util.find_spec("tdxaidata") is not None
-    except Exception:  # noqa: BLE001 — find_spec 对损坏安装也会抛
+    frozen 环境下 PyInstaller 用自定义 importer 从 PYZ 加载包, find_spec 在
+    某些布局下会返回 None, 导致明明打进包的 tdxaidata 被误判为"未安装"、
+    插件灰显。直接 import 是唯一可靠的判定。
+    """
+    try:
+        import tdxaidata  # noqa: F401
+
+        return True
+    except Exception:  # noqa: BLE001 — 依赖损坏也按不可用处理
         return False
 
 
 def availability() -> tuple[bool, str]:
-    """loader 启动自检: tdxaidata 已安装 + Key 已配置才注册。不抛异常。"""
+    """loader 启动自检: tdxaidata 可导入 + Key 已配置才注册。不抛异常。"""
     if not _module_available():
+        if getattr(sys, "frozen", False):
+            return False, "桌面版缺少 tdxaidata 组件，请重新安装完整客户端"
         return False, "tdxaidata 未安装(默认依赖, 请检查 uv sync)"
     if not get_api_key():
         return False, f"缺少 API Key(可在下方输入框直接填写,或配置环境变量 {API_KEY_ENV})"

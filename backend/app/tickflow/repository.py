@@ -79,12 +79,22 @@ def replace_with_retry(src: Path, dst: Path, *, attempts: int = 10, delay_s: flo
 
 
 def enriched_dirname(asset_type: str) -> str:
-    """asset_type → enriched parquet 目录名。ETF 走独立目录, 其余(stock)用日K enriched。"""
-    return {"stock": "kline_daily_enriched", "etf": "kline_etf_enriched", "index": "kline_index_enriched"}[asset_type]
+    """asset_type → enriched parquet 目录名。ETF/LOF 走独立目录, 其余(stock)用日K enriched。"""
+    return {
+        "stock": "kline_daily_enriched",
+        "etf": "kline_etf_enriched",
+        "index": "kline_index_enriched",
+        "lof": "kline_lof_enriched",
+    }[asset_type]
 
 
 def daily_dirname(asset_type: str) -> str:
-    return {"stock": "kline_daily", "etf": "kline_etf_daily", "index": "kline_index_daily"}[asset_type]
+    return {
+        "stock": "kline_daily",
+        "etf": "kline_etf_daily",
+        "index": "kline_index_daily",
+        "lof": "kline_lof_daily",
+    }[asset_type]
 
 
 # 盘中递推状态的最长窗口 (交易日): MA60 部分和 tail(59)、60 日动量 tail(60)
@@ -135,6 +145,9 @@ class DataStore:
             "kline_etf_daily",
             "kline_etf_enriched",
             "kline_etf_minute",
+            "kline_lof_daily",
+            "kline_lof_enriched",
+            "adj_factor_lof",
             "kline_minute",
             "adj_factor",
             "adj_factor_etf",
@@ -142,6 +155,7 @@ class DataStore:
             "instruments",
             "instruments_index",
             "instruments_etf",
+            "instruments_lof",
             "instruments_ext",
             "kline_ext",
             "pools",
@@ -187,6 +201,12 @@ class DataStore:
                 SELECT * FROM read_parquet('{d}/kline_etf_enriched/**/*.parquet', union_by_name=true)""",
             f"""CREATE OR REPLACE VIEW kline_etf_minute AS
                 SELECT * FROM read_parquet('{d}/kline_etf_minute/**/*.parquet', union_by_name=true)""",
+            f"""CREATE OR REPLACE VIEW kline_lof_daily AS
+                SELECT * FROM read_parquet('{d}/kline_lof_daily/**/*.parquet', union_by_name=true)""",
+            f"""CREATE OR REPLACE VIEW kline_lof_enriched AS
+                SELECT * FROM read_parquet('{d}/kline_lof_enriched/**/*.parquet', union_by_name=true)""",
+            f"""CREATE OR REPLACE VIEW adj_factor_lof AS
+                SELECT * FROM read_parquet('{d}/adj_factor_lof/**/*.parquet', union_by_name=true)""",
             f"""CREATE OR REPLACE VIEW kline_minute AS
                 SELECT * FROM read_parquet('{d}/kline_minute/**/*.parquet', union_by_name=true)""",
             f"""CREATE OR REPLACE VIEW adj_factor AS
@@ -199,6 +219,8 @@ class DataStore:
                 SELECT * FROM read_parquet('{d}/instruments_index/**/*.parquet', union_by_name=true)""",
             f"""CREATE OR REPLACE VIEW instruments_etf AS
                 SELECT * FROM read_parquet('{d}/instruments_etf/**/*.parquet', union_by_name=true)""",
+            f"""CREATE OR REPLACE VIEW instruments_lof AS
+                SELECT * FROM read_parquet('{d}/instruments_lof/**/*.parquet', union_by_name=true)""",
             f"""CREATE OR REPLACE VIEW instruments_ext AS
                 SELECT * FROM read_parquet('{d}/instruments_ext/**/*.parquet', union_by_name=true)""",
             f"""CREATE OR REPLACE VIEW kline_ext AS
@@ -264,6 +286,12 @@ class DataStore:
                        'etf' AS asset_type, 'tickflow' AS source
                 FROM kline_etf_daily
             """)
+        if self._has_parquet("kline_lof_daily"):
+            daily_parts.append("""
+                SELECT symbol, date, open, high, low, close, volume, amount,
+                       'lof' AS asset_type, 'eastmoney' AS source
+                FROM kline_lof_daily
+            """)
 
         if self._has_parquet("kline_daily_enriched"):
             enriched_parts.append("SELECT *, 'stock' AS asset_type, 'tickflow' AS source FROM kline_enriched")
@@ -271,6 +299,8 @@ class DataStore:
             enriched_parts.append("SELECT *, 'index' AS asset_type, 'tickflow' AS source FROM kline_index_enriched")
         if self._has_parquet("kline_etf_enriched"):
             enriched_parts.append("SELECT *, 'etf' AS asset_type, 'tickflow' AS source FROM kline_etf_enriched")
+        if self._has_parquet("kline_lof_enriched"):
+            enriched_parts.append("SELECT *, 'lof' AS asset_type, 'eastmoney' AS source FROM kline_lof_enriched")
 
         if self._has_parquet("kline_minute"):
             minute_parts.append("""
@@ -300,6 +330,11 @@ class DataStore:
             inst_parts.append("""
                 SELECT symbol, name, code, NULL AS exchange, 'etf' AS asset_type, 'tickflow' AS source
                 FROM instruments_etf
+            """)
+        if self._has_parquet("instruments_lof"):
+            inst_parts.append("""
+                SELECT symbol, name, code, NULL AS exchange, 'lof' AS asset_type, 'fuyao' AS source
+                FROM instruments_lof
             """)
 
         unions = {
@@ -374,11 +409,15 @@ class KlineRepository:
         self._etf_live_agg_cache: pl.DataFrame | None = None
         self._etf_live_agg_cache_date: date | None = None
         self._etf_instruments_cache: pl.DataFrame | None = None
+        self._lof_instruments_cache: pl.DataFrame | None = None
         # symbol 集合 memo (随对应 instruments 缓存失效): 供每请求资产分流用
         self._index_symbol_set_cache: set[str] | None = None
         self._etf_symbol_set_cache: set[str] | None = None
+        self._lof_symbol_set_cache: set[str] | None = None
         self._index_enriched_cache: pl.DataFrame | None = None
         self._index_enriched_cache_date: date | None = None
+        self._lof_enriched_cache: pl.DataFrame | None = None
+        self._lof_enriched_cache_date: date | None = None
 
         # ---- enriched 后台预热 ----
         # 启动时 compute_indicators (107万行, 低配机 50s+) 移出 lifespan 关键路径,
@@ -396,11 +435,13 @@ class KlineRepository:
         self._enriched_glob = str(store.data_dir / "kline_daily_enriched" / "**" / "*.parquet")
         self._index_enriched_glob = str(store.data_dir / "kline_index_enriched" / "**" / "*.parquet")
         self._etf_enriched_glob = str(store.data_dir / "kline_etf_enriched" / "**" / "*.parquet")
+        self._lof_enriched_glob = str(store.data_dir / "kline_lof_enriched" / "**" / "*.parquet")
         self._minute_glob = str(store.data_dir / "kline_minute" / "**" / "*.parquet")
         self._etf_minute_glob = str(store.data_dir / "kline_etf_minute" / "**" / "*.parquet")
         self._inst_glob = str(store.data_dir / "instruments" / "**" / "*.parquet")
         self._index_inst_glob = str(store.data_dir / "instruments_index" / "**" / "*.parquet")
         self._etf_inst_glob = str(store.data_dir / "instruments_etf" / "**" / "*.parquet")
+        self._lof_inst_glob = str(store.data_dir / "instruments_lof" / "**" / "*.parquet")
 
     def _new_cursor(self):
         """从根连接复制一个独立连接 (共享同一库实例, 创建开销极低)。"""
@@ -491,6 +532,9 @@ class KlineRepository:
         # 指数 enriched 同样只失效不重建 (懒加载)
         self._index_enriched_cache = None
         self._index_enriched_cache_date = None
+        # LOF enriched 同样只失效不重建
+        self._lof_enriched_cache = None
+        self._lof_enriched_cache_date = None
 
         if background:
             logger.info("cache refresh: enriched 推后台线程预热")
@@ -585,11 +629,15 @@ class KlineRepository:
         self._etf_live_agg_cache = None
         self._etf_live_agg_cache_date = None
         self._etf_instruments_cache = None
+        self._lof_instruments_cache = None
         self._index_symbol_set_cache = None
         self._etf_symbol_set_cache = None
+        self._lof_symbol_set_cache = None
         self._name_map_cache = None
         self._index_enriched_cache = None
         self._index_enriched_cache_date = None
+        self._lof_enriched_cache = None
+        self._lof_enriched_cache_date = None
 
     def _refresh_enriched(self) -> bool:
         """刷新 enriched 内存缓存。返回 True 表示因数据换代被丢弃、可重试。
@@ -1191,6 +1239,31 @@ class KlineRepository:
         except Exception as e:  # noqa: BLE001
             logger.debug("指数 enriched 缓存刷新跳过: %s", e)
 
+    def _refresh_lof_enriched(self) -> None:
+        """从 LOF enriched parquet 加载最新日到内存缓存。
+
+        LOF 无复权因子、无股本换手口径, enriched 窄表已含 compute_enriched 产物,
+        直接读最新分区即可, 不做 300 天指标重算。
+        """
+        try:
+            enriched_dir = self.store.data_dir / "kline_lof_enriched"
+            dates = sorted(
+                p.name[5:] for p in enriched_dir.glob("date=*")
+                if p.is_dir() and p.name.startswith("date=")
+            ) if enriched_dir.exists() else []
+            if not dates:
+                self._lof_enriched_cache = None
+                self._lof_enriched_cache_date = None
+                return
+            latest = date.fromisoformat(dates[-1])
+            df = pl.read_parquet(enriched_dir / f"date={dates[-1]}" / "part.parquet")
+            if df.is_empty():
+                return
+            self._lof_enriched_cache = self._with_instrument_metadata("lof", df.sort(["symbol"]))
+            self._lof_enriched_cache_date = latest
+        except Exception as e:  # noqa: BLE001
+            logger.debug("LOF enriched 缓存刷新跳过: %s", e)
+
     def _refresh_instruments(self) -> None:
         """加载 instruments 到内存。"""
         try:
@@ -1250,6 +1323,18 @@ class KlineRepository:
             self._name_map_cache = None
             logger.info("ETF instruments 缓存已加载: %d 只", len(df_all))
 
+    def _refresh_lof_instruments(self) -> None:
+        """加载 LOF instruments 到内存。"""
+        try:
+            df = guarded_collect(pl.scan_parquet(self._lof_inst_glob), priority="background")
+            if not df.is_empty():
+                self._lof_instruments_cache = df
+                self._lof_symbol_set_cache = None
+                self._name_map_cache = None
+                logger.info("LOF instruments 缓存已加载: %d 只", len(df))
+        except Exception as e:  # noqa: BLE001
+            logger.debug("LOF instruments 缓存刷新跳过: %s", e)
+
     def _assert_daily_usable(self, asset_type="stock", *, symbols=None, end=None) -> None:
         from app.services.daily_health import assert_usable
 
@@ -1297,6 +1382,12 @@ class KlineRepository:
             if self._index_enriched_cache is None:
                 return pl.DataFrame(), self._index_enriched_cache_date
             return self._index_enriched_cache, self._index_enriched_cache_date
+        if asset_type == "lof":
+            if self._lof_enriched_cache is None and refresh:
+                self._refresh_lof_enriched()
+            if self._lof_enriched_cache is None:
+                return pl.DataFrame(), self._lof_enriched_cache_date
+            return self._lof_enriched_cache, self._lof_enriched_cache_date
         return pl.DataFrame(), None
 
     def remember_prepared_daily(self, asset_type: str, frame: pl.DataFrame) -> None:
@@ -1501,6 +1592,14 @@ class KlineRepository:
             return pl.DataFrame()
         return self._etf_instruments_cache
 
+    def get_lof_instruments(self) -> pl.DataFrame:
+        """返回缓存的 LOF instruments DataFrame。"""
+        if self._lof_instruments_cache is None:
+            self._refresh_lof_instruments()
+        if self._lof_instruments_cache is None:
+            return pl.DataFrame()
+        return self._lof_instruments_cache
+
     def get_instruments_asset(self, asset_type: str) -> pl.DataFrame:
         """按资产类型返回 instruments；老 stock 路径保持原样。"""
         if asset_type == "stock":
@@ -1512,6 +1611,8 @@ class KlineRepository:
             return df
         if asset_type == "etf":
             return self.get_etf_instruments()
+        if asset_type == "lof":
+            return self.get_lof_instruments()
         return pl.DataFrame()
 
     def get_index_symbol_set(self) -> set[str]:
@@ -1532,14 +1633,25 @@ class KlineRepository:
             self._etf_symbol_set_cache = set(df["symbol"].cast(pl.Utf8).to_list())
         return self._etf_symbol_set_cache
 
+    def get_lof_symbol_set(self) -> set[str]:
+        """返回已缓存 LOF symbol 集合 (memo, 随 instruments 缓存失效)。"""
+        if self._lof_symbol_set_cache is None:
+            df = self.get_lof_instruments()
+            if df.is_empty() or "symbol" not in df.columns:
+                return set()
+            self._lof_symbol_set_cache = set(df["symbol"].cast(pl.Utf8).to_list())
+        return self._lof_symbol_set_cache
+
     def resolve_asset_type(self, symbol: str) -> str:
-        """按 symbol 判定资产类型: etf / index / stock(默认)。
+        """按 symbol 判定资产类型: etf / lof / index / stock(默认)。
 
         供 API 层对单标的查询做资产分流 (get_daily_asset 等)。
-        ETF/指数集合为 memo, 每请求查询成本可忽略。
+        ETF/LOF/指数集合为 memo, 每请求查询成本可忽略。
         """
         if symbol in self.get_etf_symbol_set():
             return "etf"
+        if symbol in self.get_lof_symbol_set():
+            return "lof"
         if symbol in self.get_index_symbol_set():
             return "index"
         return "stock"
@@ -1561,7 +1673,12 @@ class KlineRepository:
         # 若把过滤后的结果写入缓存, 后续不同 symbols 的查询会命中残缺缓存,
         # 导致新加入自选的标的查不到名称。
         name_map: dict[str, str] = {}
-        for df in (self.get_instruments(), self.get_etf_instruments(), self.get_instruments_asset("index")):
+        for df in (
+            self.get_instruments(),
+            self.get_etf_instruments(),
+            self.get_lof_instruments(),
+            self.get_instruments_asset("index"),
+        ):
             if df.is_empty() or "symbol" not in df.columns or "name" not in df.columns:
                 continue
             for symbol, name in df.select(["symbol", "name"]).iter_rows():
@@ -1758,6 +1875,20 @@ class KlineRepository:
             df = df.select(existing)
         return df
 
+    def get_lof_daily(
+        self,
+        symbol: str,
+        start: date,
+        end: date,
+        columns: list[str] | None = None,
+    ) -> pl.DataFrame:
+        """LOF 日K查询 — 直接读 kline_lof_enriched，不需要 warmup/复权重算。"""
+        self._assert_daily_usable("lof", symbols=[symbol], end=end)
+        df = self._scan_lof_daily_symbol(symbol, start, end, columns)
+        if columns and not df.is_empty():
+            df = df.select([c for c in columns if c in df.columns])
+        return df
+
     def get_daily_asset(
         self,
         asset_type: str,
@@ -1772,6 +1903,8 @@ class KlineRepository:
             return self.get_index_daily(symbol, start, end, columns)
         if asset_type == "etf":
             return self.get_etf_daily(symbol, start, end, columns)
+        if asset_type == "lof":
+            return self.get_lof_daily(symbol, start, end, columns)
         return pl.DataFrame()
 
     def _minute_glob_for(self, asset_type: str) -> str:
@@ -2050,6 +2183,26 @@ class KlineRepository:
             logger.debug("ETF 日K查询跳过: %s", e)
             return pl.DataFrame()
 
+    def _scan_lof_daily_symbol(self, symbol: str, start: date, end: date, columns: list[str] | None) -> pl.DataFrame:
+        """LOF 日K直读独立 enriched parquet；LOF 无复权链，不做运行时重算。"""
+        try:
+            lf = scan_enriched_parquet(
+                self._lof_enriched_glob,
+                cast_options=pl.ScanCastOptions(integer_cast="allow-float"),
+            ).filter(
+                (pl.col("symbol") == symbol)
+                & (pl.col("date") >= start)
+                & (pl.col("date") <= end)
+            ).sort("date")
+            if columns:
+                schema_names = lf.collect_schema().names()
+                existing = [c for c in columns if c in schema_names]
+                lf = lf.select(existing)
+            return guarded_collect(lf)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("LOF 日K查询跳过: %s", e)
+            return pl.DataFrame()
+
     def _merge_cached_and_scan(
         self,
         cached: pl.DataFrame,
@@ -2283,6 +2436,21 @@ class KlineRepository:
         df_storage = df.select(storage_cols)
         self._write_daily_partition(df_storage, "kline_etf_enriched")
 
+    def append_lof_daily(self, df: pl.DataFrame) -> None:
+        """按日分区写入 LOF 日K数据 (merge-upsert)。"""
+        if df.is_empty():
+            return
+        self._write_daily_partition(df, "kline_lof_daily")
+
+    def append_lof_enriched(self, df: pl.DataFrame) -> None:
+        """按日分区写入 LOF enriched 数据。磁盘仅写入通用基础行情窄表。"""
+        if df.is_empty():
+            return
+        from app.indicators.pipeline import ENRICHED_STORAGE_COLS
+        storage_cols = [c for c in ENRICHED_STORAGE_COLS if c in df.columns]
+        df_storage = df.select(storage_cols)
+        self._write_daily_partition(df_storage, "kline_lof_enriched")
+
     def append_daily_asset(self, asset_type: str, df: pl.DataFrame) -> None:
         """按资产类型写入日K；stock/index 保持旧目录兼容。"""
         if asset_type == "stock":
@@ -2291,6 +2459,8 @@ class KlineRepository:
             self.append_index_daily(df)
         elif asset_type == "etf":
             self.append_etf_daily(df)
+        elif asset_type == "lof":
+            self.append_lof_daily(df)
 
     def replace_daily_rows(
         self, asset_type: str, day: date, incoming: pl.DataFrame, *,
@@ -2497,6 +2667,9 @@ class KlineRepository:
         elif asset_type in {"etf", "index"}:
             for suffix in ("enriched_cache", "enriched_cache_date", "live_agg_cache", "live_agg_cache_date"):
                 setattr(self, f"_{asset_type}_{suffix}", None)
+        elif asset_type == "lof":
+            self._lof_enriched_cache = None
+            self._lof_enriched_cache_date = None
 
     def append_enriched_asset(self, asset_type: str, df: pl.DataFrame) -> None:
         """按资产类型写入 enriched；stock/index 保持旧目录兼容。"""
@@ -2506,6 +2679,8 @@ class KlineRepository:
             self.append_index_enriched(df)
         elif asset_type == "etf":
             self.append_etf_enriched(df)
+        elif asset_type == "lof":
+            self.append_lof_enriched(df)
 
     def save_index_instruments(self, df: pl.DataFrame) -> None:
         """保存指数标的维表。"""
@@ -2532,6 +2707,19 @@ class KlineRepository:
         self._name_map_cache = None
         self._refresh_etf_instruments()
 
+    def save_lof_instruments(self, df: pl.DataFrame) -> None:
+        """保存 LOF 标的维表到独立目录。"""
+        if df.is_empty() or "symbol" not in df.columns:
+            return
+        if "asset_type" not in df.columns:
+            df = df.with_columns(pl.lit("lof").alias("asset_type"))
+        out = self.store.data_dir / "instruments_lof" / "instruments_lof.parquet"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        self._atomic_write_parquet(df.unique(subset=["symbol"], keep="last").sort("symbol"), out)
+        self._lof_instruments_cache = None
+        self._name_map_cache = None
+        self._refresh_lof_instruments()
+
     def refresh_index_views(self) -> None:
         """刷新指数相关 DuckDB 视图。"""
         d = self.store.data_dir.as_posix()
@@ -2540,8 +2728,11 @@ class KlineRepository:
             "kline_index_enriched": f"{d}/kline_index_enriched/**/*.parquet",
             "kline_etf_daily": f"{d}/kline_etf_daily/**/*.parquet",
             "kline_etf_enriched": f"{d}/kline_etf_enriched/**/*.parquet",
+            "kline_lof_daily": f"{d}/kline_lof_daily/**/*.parquet",
+            "kline_lof_enriched": f"{d}/kline_lof_enriched/**/*.parquet",
             "instruments_index": f"{d}/instruments_index/**/*.parquet",
             "instruments_etf": f"{d}/instruments_etf/**/*.parquet",
+            "instruments_lof": f"{d}/instruments_lof/**/*.parquet",
         }.items():
             self.refresh_view(name, path)
         with self._ddl_lock:
@@ -2567,12 +2758,16 @@ class KlineRepository:
             "kline_etf_daily": f"{d}/kline_etf_daily/**/*.parquet",
             "kline_etf_enriched": f"{d}/kline_etf_enriched/**/*.parquet",
             "kline_etf_minute": f"{d}/kline_etf_minute/**/*.parquet",
+            "kline_lof_daily": f"{d}/kline_lof_daily/**/*.parquet",
+            "kline_lof_enriched": f"{d}/kline_lof_enriched/**/*.parquet",
+            "adj_factor_lof": f"{d}/adj_factor_lof/**/*.parquet",
             "kline_minute": f"{d}/kline_minute/**/*.parquet",
             "adj_factor": f"{d}/adj_factor/**/*.parquet",
             "adj_factor_etf": f"{d}/adj_factor_etf/**/*.parquet",
             "instruments": f"{d}/instruments/**/*.parquet",
             "instruments_index": f"{d}/instruments_index/**/*.parquet",
             "instruments_etf": f"{d}/instruments_etf/**/*.parquet",
+            "instruments_lof": f"{d}/instruments_lof/**/*.parquet",
         }
         for name, path in views.items():
             self.refresh_view(name, path)
@@ -2697,6 +2892,7 @@ class KlineRepository:
             "stock": "kline_daily",
             "index": "kline_index_daily",
             "etf": "kline_etf_daily",
+            "lof": "kline_lof_daily",
         }.get(asset_type)
         if not table:
             return
@@ -2709,7 +2905,7 @@ class KlineRepository:
 
     def _with_instrument_metadata(self, asset_type: str, df: pl.DataFrame) -> pl.DataFrame:
         """补齐实时内存缓存所需的维表字段；这些字段不会写入 enriched 分区。"""
-        if asset_type not in {"stock", "etf"} or df.is_empty():
+        if asset_type not in {"stock", "etf", "lof"} or df.is_empty():
             return df
         instruments = self.get_instruments_asset(asset_type)
         if instruments.is_empty() or "symbol" not in instruments.columns:
@@ -2739,6 +2935,9 @@ class KlineRepository:
         elif asset_type == "index":
             table = "kline_index_enriched"
             existing_cache = self._index_enriched_cache if self._index_enriched_cache_date == dt else pl.DataFrame()
+        elif asset_type == "lof":
+            table = "kline_lof_enriched"
+            existing_cache = self._lof_enriched_cache if self._lof_enriched_cache_date == dt else pl.DataFrame()
         else:
             return
 
@@ -2773,6 +2972,9 @@ class KlineRepository:
         elif asset_type == "index":
             self._index_enriched_cache = merged_cache
             self._index_enriched_cache_date = dt
+        elif asset_type == "lof":
+            self._lof_enriched_cache = merged_cache
+            self._lof_enriched_cache_date = dt
 
     def flush_live_daily(self, df: pl.DataFrame) -> None:
         """覆写当天 kline_daily 分区 (实时行情落盘, 非merge)。"""
@@ -2788,6 +2990,7 @@ class KlineRepository:
             "stock": "kline_daily",
             "index": "kline_index_daily",
             "etf": "kline_etf_daily",
+            "lof": "kline_lof_daily",
         }.get(asset_type)
         if not table:
             return
@@ -2820,6 +3023,8 @@ class KlineRepository:
             table = "kline_etf_enriched"
         elif asset_type == "index":
             table = "kline_index_enriched"
+        elif asset_type == "lof":
+            table = "kline_lof_enriched"
         else:
             return
 
@@ -2850,3 +3055,6 @@ class KlineRepository:
         elif asset_type == "index":
             self._index_enriched_cache = cache_df
             self._index_enriched_cache_date = dt
+        elif asset_type == "lof":
+            self._lof_enriched_cache = cache_df
+            self._lof_enriched_cache_date = dt

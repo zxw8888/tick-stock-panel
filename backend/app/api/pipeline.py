@@ -5,9 +5,16 @@ import asyncio
 import concurrent.futures as _cf
 import logging
 
-from fastapi import APIRouter, HTTPException, Request
+from datetime import date
 
+from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel, Field
+
+from app.asset_types import ASSET_TYPES
 from app.jobs import daily_pipeline
+from app.market_time import cn_today
+from app.services import preferences, symbol_sync as symbol_sync_service
+from app.tickflow.capabilities import Cap
 from app.services.pipeline_jobs import (
     JobCancelledError,
     job_store,
@@ -23,6 +30,48 @@ _long_task_executor = _cf.ThreadPoolExecutor(max_workers=2, thread_name_prefix="
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/pipeline", tags=["pipeline"])
+
+
+class SymbolSyncBody(BaseModel):
+    """单标的同步请求体。asset_type 可省略，服务端按标的维表解析并强校验。"""
+
+    model_config = {"extra": "forbid"}
+
+    symbol: str = Field(min_length=1, max_length=32)
+    asset_type: str | None = None
+    granularity: str
+    range: str
+    start_date: str | None = None
+    end_date: str | None = None
+
+
+def _parse_iso_date(value: str, field: str) -> date:
+    try:
+        parsed = date.fromisoformat(value)
+    except (TypeError, ValueError):
+        raise HTTPException(400, f"{field} 必须是 YYYY-MM-DD 格式")
+    if parsed.isoformat() != value:
+        raise HTTPException(400, f"{field} 必须是标准 YYYY-MM-DD 格式")
+    return parsed
+
+
+def _daily_sync_allowed(capset) -> bool:
+    """日K可由 TickFlow 或自定义日K源提供；LOF 走东财，不受此门禁。"""
+    if capset.has(Cap.KLINE_DAILY_BATCH):
+        return True
+    from app.data_providers import custom as custom_sources
+
+    return custom_sources.provider_has_dataset(preferences.get_daily_data_provider(), "daily")
+
+
+def _minute_sync_allowed(capset) -> bool:
+    from app.services import kline_sync
+
+    provider = kline_sync._selected_minute_provider_name()
+    if provider == "tickflow":
+        return capset.has(Cap.KLINE_MINUTE_BATCH)
+    _, fallback, error = kline_sync._resolve_minute_provider(provider)
+    return error is None and not fallback
 
 
 @router.post("/run")
@@ -47,7 +96,7 @@ async def trigger_pipeline_job(repo, capset, quote_service=None) -> dict:
     )
 
 
-async def _submit_job(repo, quote_service, make_run) -> dict:
+async def _submit_job(repo, quote_service, make_run, *, long_running: bool = False) -> dict:
     """任务化执行公共机制: 单飞 create → 重任务槽 → 行情暂停 → 缓存失效。
 
     make_run(progress) 返回实际执行闭包(阻塞 IO + CPU, 在 executor 里跑)。
@@ -59,7 +108,7 @@ async def _submit_job(repo, quote_service, make_run) -> dict:
     job_store.reap_stale()
 
     # 单飞: 复用任何活跃 (pending∨running) 任务, is_new=False 时不再调度新任务
-    job_id, is_new = job_store.create()
+    job_id, is_new = job_store.create(long_running=long_running)
     if not is_new:
         return {"job_id": job_id, "reused": True}
 
@@ -105,6 +154,69 @@ async def _submit_job(repo, quote_service, make_run) -> dict:
 
     asyncio.create_task(task())
     return {"job_id": job_id, "reused": False}
+
+
+@router.post("/symbol-sync")
+async def symbol_sync(request: Request, body: SymbolSyncBody) -> dict:
+    """单个标的长时间 / 分钟K同步，任务化执行并复用统一进度轮询。"""
+    repo = request.app.state.repo
+    capset = request.app.state.capabilities
+    quote_service = getattr(request.app.state, "quote_service", None)
+
+    try:
+        symbol = symbol_sync_service.normalize_symbol(body.symbol)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+    resolved = repo.resolve_asset_type(symbol)
+    asset_type = body.asset_type
+    if asset_type is not None:
+        if asset_type not in ASSET_TYPES:
+            raise HTTPException(400, "不支持的资产类型")
+        if resolved != "stock" and asset_type != resolved:
+            raise HTTPException(400, "资产类型与标的不匹配")
+    else:
+        asset_type = resolved
+
+    if body.granularity not in {"daily", "minute"}:
+        raise HTTPException(400, "granularity 必须是 daily 或 minute")
+    if body.range not in {"custom", "full"}:
+        raise HTTPException(400, "range 必须是 custom 或 full")
+
+    start_date: date | None = None
+    end_date: date | None = None
+    if body.range == "custom":
+        if not body.start_date or not body.end_date:
+            raise HTTPException(400, "自定义范围必须提供 start_date 与 end_date")
+        start_date = _parse_iso_date(body.start_date, "start_date")
+        end_date = _parse_iso_date(body.end_date, "end_date")
+        if start_date < date(1990, 12, 19) or end_date > cn_today() or start_date > end_date:
+            raise HTTPException(400, "日期范围不合法")
+    elif body.start_date or body.end_date:
+        raise HTTPException(400, "full 模式不接受起止日期")
+
+    if body.granularity == "minute":
+        if asset_type not in {"stock", "etf"}:
+            raise HTTPException(400, "指数/LOF 不支持分钟K落库")
+        if not _minute_sync_allowed(capset):
+            raise HTTPException(403, "当前分钟数据源不可用")
+    elif asset_type != "lof" and not _daily_sync_allowed(capset):
+        raise HTTPException(403, "当前日K数据源不可用")
+
+    return await _submit_job(
+        repo, quote_service,
+        lambda progress: (lambda: symbol_sync_service.run_symbol_sync(
+            repo, capset,
+            symbol=symbol,
+            asset_type=asset_type,
+            granularity=body.granularity,
+            range_mode=body.range,
+            start_date=start_date,
+            end_date=end_date,
+            on_progress=progress,
+        )),
+        long_running=(body.granularity == "minute" or body.range == "full"),
+    )
 
 
 @router.post("/adj-factor/run")

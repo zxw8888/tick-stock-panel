@@ -61,7 +61,7 @@ export function TradeKlineModal({ trade, assetType, navItems, currentKey, onNavi
     setShowIntraday(true)
   }, [replayKey])
   const tradeSymbol = trade?.symbol
-  const handleAssetType = useCallback((type: 'stock' | 'etf' | 'index') => {
+  const handleAssetType = useCallback((type: 'stock' | 'etf' | 'index' | 'lof') => {
     if (tradeSymbol) setResolvedAsset(previous => previous?.symbol === tradeSymbol && previous.type === type
       ? previous : { symbol: tradeSymbol, type })
   }, [tradeSymbol])

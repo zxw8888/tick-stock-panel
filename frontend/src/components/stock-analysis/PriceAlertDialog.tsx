@@ -18,7 +18,7 @@ import { fmtAssetPrice, pricePrecision, roundPriceToTick } from '@/lib/format'
 
 interface Props {
   symbol: string
-  assetType?: 'stock' | 'etf' | 'index'
+  assetType?: 'stock' | 'etf' | 'index' | 'lof'
   name: string
   onClose: () => void
   initialTarget?: number

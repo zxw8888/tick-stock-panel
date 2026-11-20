@@ -16,11 +16,13 @@ def market(monkeypatch, tmp_path):
     monkeypatch.setattr(preferences, "get_realtime_data_provider", lambda: "tickflow")
     monkeypatch.setattr(preferences, "get_realtime_pull_stock", lambda: True)
     monkeypatch.setattr(preferences, "get_realtime_pull_etf", lambda: False)
+    monkeypatch.setattr(preferences, "get_realtime_pull_lof", lambda: False)
     repo = SimpleNamespace(
         store=SimpleNamespace(data_dir=tmp_path),
         get_index_symbol_set=lambda: set(CORE_INDEX_SYMBOLS) | {"000985.SH", "000300.SH"},
         get_etf_symbol_set=lambda: {"159558.SZ", "510300.SH"},
         get_etf_instruments=lambda: pl.DataFrame({"symbol": ["159558.SZ", "510300.SH"]}),
+        get_lof_symbol_set=lambda: set(),
     )
     service = quote_service.QuoteService()
     service.set_repo(repo)

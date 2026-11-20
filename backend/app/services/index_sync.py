@@ -189,6 +189,68 @@ def sync_etf_instruments(repo: KlineRepository) -> int:
     return etf_df.height
 
 
+def sync_lof_instruments(repo: KlineRepository) -> int:
+    """单独同步 LOF 标的维表(返回 LOF 数量)。
+
+    数据源: fuyao fund-lof 官方清单优先, 无 Key 时回退东财基金总表代码段。
+    TickFlow 免费档实测 fund=0 / lof=400, 不走 TickFlow 通道。
+    """
+    from app.services import lof_data
+
+    df = lof_data.fetch_instruments()
+    if df.is_empty():
+        logger.warning("LOF 标的维表为空, 跳过本次同步")
+        return 0
+    if "asset_type" not in df.columns:
+        df = df.with_columns(pl.lit("lof").alias("asset_type"))
+    repo.save_lof_instruments(df)
+    repo.refresh_index_views()
+    logger.info("LOF 标的同步完成: %d 只", df.height)
+    return df.height
+
+
+def sync_and_persist_lof_daily(
+    repo: KlineRepository,
+    start_date: datetime | None = None,
+    end_date: datetime | None = None,
+    symbols_override: list[str] | None = None,
+    on_chunk_done: Callable[[int, int], None] | None = None,
+) -> int:
+    """同步 LOF 日K到 kline_lof_* parquet 并计算 LOF enriched。
+
+    LOF 日K源为东财 push2his (TickFlow/fuyao 均不提供 LOF 历史日线)。
+    compute_enriched 不传 instruments: LOF 无股本/涨跌停/连板, 与 ETF 同口径。
+    """
+    from app.services import lof_data
+
+    if symbols_override:
+        symbols = sorted(set(s for s in symbols_override if s))
+    else:
+        instruments = repo.get_lof_instruments()
+        if instruments.is_empty():
+            sync_lof_instruments(repo)
+            instruments = repo.get_lof_instruments()
+        if instruments.is_empty() or "symbol" not in instruments.columns:
+            return 0
+        symbols = sorted(set(instruments["symbol"].to_list()))
+    if not symbols:
+        return 0
+
+    end = (end_date or datetime.now()).date()
+    start = (start_date or (datetime.now() - timedelta(days=365))).date()
+    raw = lof_data.fetch_daily(symbols, start=start, end=end, on_chunk_done=on_chunk_done)
+    if raw.is_empty():
+        return 0
+
+    repo.append_lof_daily(raw)
+    # LOF 无复权因子源, 前复权链为空; 通用技术指标照常计算。
+    enriched = compute_enriched(raw, factors=None, instruments=None)
+    repo.append_lof_enriched(enriched)
+    repo.refresh_index_views()
+    logger.info("LOF daily synced: %d rows / %d symbols", raw.height, len(symbols))
+    return raw.height
+
+
 def _iter_custom_daily_frames(provider, symbols, asset_type, start_time, end_time, on_chunk_done):
     """自定义源日K帧迭代器: iter_daily 流式优先, 仅实现 get_daily 的源包装为单帧。
 

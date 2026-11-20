@@ -18,6 +18,7 @@ import {
   Info,
   WandSparkles,
   Upload,
+  Target,
 } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { EndpointTestDialog } from '@/components/EndpointTestDialog'
@@ -54,6 +55,7 @@ import { MinuteSyncConfig } from '@/components/data/MinuteSyncConfig'
 import { AdjFactorSyncConfig } from '@/components/data/AdjFactorSyncConfig'
 import { RegimeConfigCard } from '@/components/data/RegimeConfigCard'
 import { PipelineScopeConfig } from '@/components/data/PipelineScopeConfig'
+import { SymbolSyncPanel } from '@/components/data/SymbolSyncPanel'
 import { PageSettingsModal, getCardVisibility, getCardOrder, type CardKey } from '@/components/data/PageSettingsModal'
 import { QuoteConfigCard } from '@/components/data/QuoteConfigCard'
 import { EnrichedSchemaModal } from '@/components/data/SchemaModal'
@@ -269,6 +271,7 @@ export function Data() {
   const hasMinuteCap = usableOr('minute', !!tfCaps?.['kline.minute.batch'])
   const indexAuto = prefs.data?.pipeline_pull_index ?? true
   const etfAuto = prefs.data?.pipeline_pull_etf ?? false
+  const lofAuto = prefs.data?.pipeline_pull_lof ?? false
   // 管道步骤 + 各步能力路由 (路由徽标数据源 = 能力矩阵, 单一权威; 指标为本地计算无路由)
   const pipelineSteps: { label: string; cap?: RouteCapId }[] = [
     { label: '日K', cap: 'daily' },
@@ -276,6 +279,7 @@ export function Data() {
     { label: '指标' },
     ...(indexAuto ? [{ label: '指数', cap: 'daily' as const }] : []),
     ...(etfAuto ? [{ label: 'ETF', cap: 'daily' as const }] : []),
+    ...(lofAuto ? [{ label: 'LOF', cap: 'daily' as const }] : []),
     ...((hasMinuteCap && minuteAuto) ? [{ label: '分钟K', cap: 'minute' as const }] : []),
   ]
 
@@ -349,6 +353,14 @@ export function Data() {
     latest_date: s.etf_daily?.latest_date ?? s.etf_enriched?.latest_date ?? null,
     symbols_covered: s.etf_daily?.symbols_covered ?? s.etf_instruments?.rows ?? 0,
     trading_days: s.etf_daily?.trading_days ?? s.etf_enriched?.trading_days ?? 0,
+  } : null
+  // LOF 统计(独立 kline_lof_*)
+  const lofOverviewStats = s ? {
+    rows: 0,
+    earliest_date: s.lof_daily?.earliest_date ?? s.lof_enriched?.earliest_date ?? null,
+    latest_date: s.lof_daily?.latest_date ?? s.lof_enriched?.latest_date ?? null,
+    symbols_covered: s.lof_daily?.symbols_covered ?? s.lof_instruments?.rows ?? 0,
+    trading_days: s.lof_daily?.trading_days ?? s.lof_enriched?.trading_days ?? 0,
   } : null
   const indexOverviewLabel = s ? '日 · 维表 · 日K · 指标' : undefined
   const indexEarliestDate = s?.index_daily?.earliest_date ?? s?.index_enriched?.earliest_date ?? null
@@ -541,6 +553,26 @@ export function Data() {
             onShowFields={(t) => setSchemaTable(t ?? 'etf_daily')}
           />
         )
+      case 'lof':
+        return (
+          <StatCard
+            title="LOF"
+            hint="上市开放式基金 · 东财日K / fuyao 维表"
+            stats={lofOverviewStats}
+            loading={isLoading}
+            tierKey="etf"
+            capLimits={mergedCaps}
+            customProvider="eastmoney / fuyao"
+            auto={lofAuto}
+            subLabel="维表 · 日K · 指标"
+            fieldTabs={[
+              { label: '维表', table: 'lof_instruments' },
+              { label: '日K', table: 'lof_daily' },
+              { label: '指标', table: 'lof_enriched' },
+            ] as FieldTab[]}
+            onShowFields={(t) => setSchemaTable(t ?? 'lof_daily')}
+          />
+        )
       case 'minute':
         return (
           <StatCard
@@ -643,6 +675,14 @@ export function Data() {
             >
               <CheckSquare className="h-3.5 w-3.5" />
               数据范围
+            </button>
+            <button
+              onClick={() => setOpenSettings('symbol-sync')}
+              disabled={isRunning}
+              className="inline-flex items-center gap-1 px-2 py-1 rounded-btn text-secondary hover:text-accent hover:bg-accent/8 text-xs transition-colors duration-150 disabled:opacity-40 disabled:pointer-events-none"
+            >
+              <Target className="h-3.5 w-3.5" />
+              单标的同步
             </button>
             <button
               onClick={() => setShowRepair(true)}
@@ -1055,6 +1095,7 @@ export function Data() {
               defaultAssets={[
                 ...(prefs.data?.pipeline_pull_a_share !== false ? ['stock' as const] : []),
                 ...(prefs.data?.pipeline_pull_etf ? ['etf' as const] : []),
+                ...(prefs.data?.pipeline_pull_lof ? ['lof' as const] : []),
                 ...(prefs.data?.pipeline_pull_index !== false ? ['index' as const] : []),
               ]}
               onStart={id => { setActiveJobId(id); qc.invalidateQueries({ queryKey: QK.pipelineJobs }) }} />
@@ -1112,6 +1153,21 @@ export function Data() {
         {openSettings === 'pipeline-scope' && (
           <SettingsModal title="盘后管道 · 拉取内容" onClose={() => setOpenSettings(null)}>
             <PipelineScopeConfig />
+          </SettingsModal>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {openSettings === 'symbol-sync' && (
+          <SettingsModal title="单标的同步 · 长历史 / 分钟K" width="max-w-2xl" onClose={() => setOpenSettings(null)}>
+            <SymbolSyncPanel
+              isRunning={isRunning}
+              job={job.data}
+              onStarted={jobId => {
+                setActiveJobId(jobId)
+                startTime.current = Date.now()
+              }}
+            />
           </SettingsModal>
         )}
       </AnimatePresence>

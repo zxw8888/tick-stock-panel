@@ -62,7 +62,11 @@ class TickFlowProvider:
 
     def get_instruments(self, asset_type: AssetType) -> pl.DataFrame:
         tf = get_client()
-        instrument_type = "stock" if asset_type == "stock" else asset_type
+        # fork: asset_type → TickFlow instrument_type 集中映射(lof→fund),
+        # 当前 LOF 维表走 app.services.lof_data, 此处仅为契约完整与未来上游支持。
+        from app.asset_types import to_instrument_type
+
+        instrument_type = to_instrument_type(asset_type)
         rows: list[dict] = []
         for ex in _EXCHANGES:
             try:

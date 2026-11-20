@@ -84,6 +84,11 @@ hiddenimports += collect_submodules("polars")
 datas += [
     (str(ROOT / "backend" / "app" / "plugins" / "fuyao" / "plugin.yaml"), "app/plugins/fuyao"),
     (str(ROOT / "backend" / "app" / "plugins" / "tdxquant" / "plugin.yaml"), "app/plugins/tdxquant"),
+    (str(ROOT / "backend" / "app" / "plugins" / "freetdx" / "plugin.yaml"), "app/plugins/freetdx"),
+    # python 型插件的依赖清单: install_plugin 会读插件目录下的 requirements.txt,
+    # 缺了会报 "Python 型插件需要 requirements.txt" (即使依赖已随主程序装好)。
+    (str(ROOT / "backend" / "app" / "plugins" / "tdxquant" / "requirements.txt"), "app/plugins/tdxquant"),
+    (str(ROOT / "backend" / "app" / "plugins" / "freetdx" / "requirements.txt"), "app/plugins/freetdx"),
 ]
 hiddenimports += [
     "app.plugins.fuyao.provider",
@@ -91,7 +96,13 @@ hiddenimports += [
     "app.plugins.tdxquant.provider",
     "app.plugins.tdxquant.client",
     "app.plugins.tdxquant.probe",
+    "app.plugins.freetdx.provider",
+    "app.plugins.freetdx.client",
 ]
+
+# pytdx (freetdx 插件依赖) — 纯 Python, 但部分模块按字符串动态导入, 全量收集
+if find_spec("pytdx") is not None:
+    hiddenimports += collect_submodules("pytdx")
 
 # ── 后端源码扩展 (app/custom/*) ──────────────────────────────────────
 # extensions/loader.py 运行时用 importlib.import_module + pkgutil.iter_modules
@@ -105,6 +116,14 @@ datas += [(str(ROOT / "backend" / "app" / "custom"), "app/custom")]
 hiddenimports += collect_submodules("app.custom")
 
 # ── pywebview 平台后端 (动态导入, PyInstaller 默认抓不到) ────────────
+# 这些模块缺失时 collect_submodules() 会静默返回空列表, 旧版本曾因此产出
+# "启动即 ModuleNotFoundError: webview" 的包。这里显式失败, 指向官方构建命令。
+for _desktop_mod in ("webview", "proxy_tools", "bottle", "clr_loader", "pythonnet"):
+    if find_spec(_desktop_mod) is None:
+        raise RuntimeError(
+            f"打包环境缺少桌面依赖 {_desktop_mod}; 请先在 backend 目录执行 "
+            "uv sync --no-dev --extra desktop --extra legacy-cpu"
+        )
 hiddenimports += collect_submodules("webview")
 hiddenimports += collect_submodules("webview.platforms")
 # pywebview 运行时依赖链 (webview/__init__ 顶层 import proxy_tools, Windows 端

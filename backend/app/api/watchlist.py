@@ -520,15 +520,17 @@ def watchlist_enriched(
     symbols = [r["symbol"] for r in entries]
     if not symbols:
         return {"rows": [], "as_of": None, "elapsed_ms": 0,
-                "dates": {"stock": None, "etf": None, "index": None}}
+                "dates": {"stock": None, "etf": None, "index": None, "lof": None}}
 
-    # 按资产拆分自选 symbol; ETF enriched 是独立缓存, 仅自选真的含 ETF 才去加载
-    # (避免无 ETF 用户在缓存冷启动时触发 ETF 全量懒加载)
+    # 按资产拆分自选 symbol; ETF/LOF enriched 是独立缓存, 仅自选真的含该类才去加载
+    # (避免无 ETF/LOF 用户在缓存冷启动时触发全量懒加载)
     etf_set = repo.get_etf_symbol_set()
+    lof_set = repo.get_lof_symbol_set()
     index_set = repo.get_index_symbol_set()
     etf_symbols = [s for s in symbols if s in etf_set]
-    index_symbols = [s for s in symbols if s not in etf_set and s in index_set]
-    stock_symbols = [s for s in symbols if s not in etf_set and s not in index_set]
+    lof_symbols = [s for s in symbols if s not in etf_set and s in lof_set]
+    index_symbols = [s for s in symbols if s not in etf_set and s not in lof_set and s in index_set]
+    stock_symbols = [s for s in symbols if s not in etf_set and s not in lof_set and s not in index_set]
 
     df_e, cache_date = repo.get_enriched_latest()
 
@@ -568,8 +570,19 @@ def watchlist_enriched(
             df_idx = idx_watchlist_df
         df = df_idx if df.is_empty() else pl.concat([df, df_idx], how="diagonal_relaxed")
 
-    # as_of 取三类缓存中较旧者
-    dates = [d for d in (cache_date if stock_symbols else None, etf_date, index_date) if d is not None]
+    # LOF 行合并 (镜像 ETF 分支); 缺失列 (换手率/涨跌停信号等) 为 null
+    lof_date = None
+    if lof_symbols:
+        df_lof_all, lof_date = repo.get_enriched_latest_asset("lof")
+        lof_watchlist_df = pl.DataFrame({"symbol": lof_symbols})
+        if not df_lof_all.is_empty():
+            df_lof = lof_watchlist_df.join(_latest_watchlist_rows(df_lof_all, lof_symbols), on="symbol", how="left")
+        else:
+            df_lof = lof_watchlist_df
+        df = df_lof if df.is_empty() else pl.concat([df, df_lof], how="diagonal_relaxed")
+
+    # as_of 取各类缓存中较旧者
+    dates = [d for d in (cache_date if stock_symbols else None, etf_date, index_date, lof_date) if d is not None]
     as_of = min(dates) if dates else None
     # 按资产类型的行情日期 (ISO): as_of 是三类取 min 的全局值, 分不清哪类过期。
     # 前端分时缩略图续画据此判定「该类行情是否为当日」—— ETF 未开实时拉取时
@@ -579,6 +592,7 @@ def watchlist_enriched(
         "stock": str(cache_date) if cache_date else None,
         "etf": str(etf_date) if etf_date else None,
         "index": str(index_date) if index_date else None,
+        "lof": str(lof_date) if lof_date else None,
     }
     if df.is_empty():
         return {"rows": [], "as_of": str(as_of) if as_of else None,
@@ -595,7 +609,10 @@ def watchlist_enriched(
     )
 
     # 标注资产类型: 前端据此渲染徽标/豁免板块筛选/分时列降级
-    asset_map = {**{s: "etf" for s in etf_symbols}, **{s: "index" for s in index_symbols}}
+    asset_map = (
+        {**{s: "etf" for s in etf_symbols}, **{s: "index" for s in index_symbols}}
+        | {s: "lof" for s in lof_symbols}
+    )
     df = df.with_columns(
         pl.col("symbol").replace_strict(asset_map, default="stock", return_dtype=pl.Utf8).alias("asset_type")
     )
@@ -604,7 +621,10 @@ def watchlist_enriched(
     prepared_reader = getattr(repo, "get_prepared_daily", None)
     if callable(prepared_reader):
         parts = []
-        for asset, group in (("stock", stock_symbols), ("etf", etf_symbols), ("index", index_symbols)):
+        for asset, group in (
+            ("stock", stock_symbols), ("etf", etf_symbols),
+            ("index", index_symbols), ("lof", lof_symbols),
+        ):
             missing = df.filter(pl.col("symbol").is_in(group))
             if "close" in missing.columns:
                 missing = missing.filter(pl.col("close").is_null())

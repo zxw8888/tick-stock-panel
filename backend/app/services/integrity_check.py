@@ -14,7 +14,7 @@ from app.services.fs_utils import atomic_write_text
 
 logger = logging.getLogger(__name__)
 ASSET_TABLES = {family: table for table, family in data_integrity.TABLE_FAMILY.items()}
-ASSET_LABELS = {"stock": "股票", "etf": "ETF", "index": "指数"}
+ASSET_LABELS = {"stock": "股票", "etf": "ETF", "index": "指数", "lof": "LOF"}
 KIND_LABELS = {
     "missing": "日期缺失", "snapshot": "盘中快照未定版", "corrupt": "文件损坏或为空",
     "invalid": "日K数值异常", "unconfirmed": "缺失日期待核实",

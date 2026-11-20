@@ -1,4 +1,4 @@
-"""盘后管道「A股 / ETF / 指数」拉取开关回归测试。
+"""盘后管道「A股 / ETF / 指数 / LOF」拉取开关回归测试。
 
 覆盖 issue #216: `get_pipeline_pull_a_share()` 硬编码 True 且 A股键不在
 `set_pipeline_pull_types()` 白名单内, 导致取消勾选 A 股完全不生效。
@@ -22,10 +22,11 @@ def _isolated(tmp_path, monkeypatch):
 
 
 def test_a_share_defaults_to_true_when_unset():
-    """未设置时三个开关的默认值: A股/指数 默认开, ETF 默认关。"""
+    """未设置时的默认值: A股/指数 默认开, ETF/LOF 默认关。"""
     assert preferences.get_pipeline_pull_a_share() is True
     assert preferences.get_pipeline_pull_index() is True
     assert preferences.get_pipeline_pull_etf() is False
+    assert preferences.get_pipeline_pull_lof() is False
 
 
 def test_a_share_toggle_off_is_honored():
@@ -45,16 +46,18 @@ def test_set_pipeline_pull_types_persists_a_share():
 
 
 def test_set_pipeline_pull_types_independent_switches():
-    """三个开关互相独立: 关 A 股不影响 ETF / 指数。"""
+    """四个开关互相独立: 关 A 股不影响 ETF / 指数 / LOF。"""
     result = preferences.set_pipeline_pull_types(
         {
             "pipeline_pull_a_share": False,
             "pipeline_pull_etf": True,
             "pipeline_pull_index": False,
+            "pipeline_pull_lof": True,
         }
     )
     assert result == {
         "pipeline_pull_a_share": False,
         "pipeline_pull_etf": True,
         "pipeline_pull_index": False,
+        "pipeline_pull_lof": True,
     }
