@@ -347,6 +347,58 @@ export interface KlineDailyLatestResponse {
   quote_freshness?: QuoteFreshness | null
 }
 
+/** 单个蜡烛形态的元数据 (列名 + 中文标签)。 */
+export interface KlinePatternMeta {
+  key: string
+  label: string
+}
+
+export interface KlinePatternsResponse {
+  symbol: string
+  asset_type?: 'stock' | 'etf' | 'index' | 'lof'
+  start: string
+  end: string
+  patterns: KlinePatternMeta[]
+  /** 只含非零命中的行; 值为 -100 / 0 / +100 (hikkake 可叠加到 ±200)。 */
+  rows: (Record<string, number | string> & { date: string })[]
+}
+
+/** 筹码分布 (CYQ) 的横截面结果, 与 InStock CYQCalculator 同结构。 */
+export interface KlineChipsBin {
+  /** 90% / 70% 成本区间与集中度 */
+  priceRange: [string, string]
+  concentration: number
+}
+
+export interface KlineChipsPayload {
+  x: number[]
+  y: number[]
+  /** 当前价所在档位 (1-based) */
+  b: number
+  /** 目标交易日 */
+  d: string | null
+  /** 参与衰减的交易日数 */
+  t: number
+  /** 获利盘比例 0~1 */
+  benefit_part: number
+  /** 平均成本 (两位小数字符串) */
+  avg_cost: string
+  percent_chips: Record<'90' | '70', KlineChipsBin>
+}
+
+export interface KlineChipsResponse {
+  symbol: string
+  asset_type?: 'stock' | 'etf' | 'index' | 'lof'
+  date: string | null
+  /**
+   * 换手率口径: turnover_rate=真实换手 (股票);
+   * volume_proxy=无量纲成交量代理 (ETF/LOF/指数); unavailable=无可用数据。
+   */
+  turnover_source: 'turnover_rate' | 'volume_proxy' | 'unavailable'
+  chips: Partial<KlineChipsPayload>
+  detail?: string
+}
+
 // ===== Watchlist =====
 export interface WatchlistEntry {
   symbol: string
@@ -433,6 +485,10 @@ export interface ScreenerStrategy {
   name: string
   description: string
   source?: string
+  /** recommended = 随程序分发的推荐策略包 */
+  origin?: 'recommended' | string
+  /** 推荐策略的适用股票画像（仅展示/筛选，不是执行期硬过滤） */
+  suitable_for?: StrategySuitableFor
   /** 支持的周期, 如 ['1d'] / ['1m'] (分钟策略) */
   timeframes?: string[]
   library?: StrategyLibraryInfo | null
@@ -904,12 +960,26 @@ export interface CompositeChildInfo {
   weight: number
 }
 
+export interface StrategySuitableFor {
+  market_cap: string[]
+  styles: string[]
+  volatility: string[]
+  liquidity: string[]
+  boards: string[]
+  avoid: string[]
+  note: string
+}
+
 export interface StrategyDetail {
   id: string
   name: string
   description: string
   tags: string[]
   source: 'custom' | 'ai' | 'composite'
+  /** recommended = 随程序分发的推荐策略包 */
+  origin?: 'recommended' | string
+  /** 推荐策略的适用股票画像（仅展示/筛选，不是执行期硬过滤） */
+  suitable_for?: StrategySuitableFor
   research_only?: boolean
   library?: StrategyLibraryInfo | null
   execution_backend: 'polars_expr' | 'matrix_native' | 'python_history_legacy' | 'composite' | 'minute_filter'
@@ -938,6 +1008,43 @@ export interface StrategyDetail {
   limit: number
   // 叠加策略(composite)专属: 子策略列表与合并模式。非 composite 时为 null。
   composite_children?: CompositeChildInfo[] | null
+}
+
+export type RecommendedStrategyStatus =
+  | 'not_installed'
+  | 'installed'
+  | 'update_available'
+  | 'modified'
+  | 'missing'
+  | 'conflict'
+
+export interface RecommendedStrategyItem {
+  id: string
+  name: string
+  file: string
+  version: string
+  category: string
+  description: string
+  asset_types: string[]
+  timeframes: string[]
+  sources: string[]
+  suitable_for: StrategySuitableFor
+  status: RecommendedStrategyStatus
+  installed_path: string
+  installed_version: string | null
+  installed_at: string | null
+  installed_pack_version: string | null
+}
+
+export interface RecommendedStrategiesResponse {
+  pack_version: string
+  prompt_pending_ids: string[]
+  items: RecommendedStrategyItem[]
+}
+
+export interface RecommendedInstallResponse extends RecommendedStrategiesResponse {
+  installed_ids: string[]
+  backup_dir: string | null
 }
 
 export type ScoringDirection = 'high' | 'low'
@@ -1206,6 +1313,13 @@ export interface Lot {
 }
 
 // ===== Paper (虚拟账户/模拟盘) =====
+/** 账户级自动跟单范围: 全市场 / 手动指定股票 / 自选分组动态 */
+export interface PaperAutoScope {
+  scope: 'all' | 'symbols' | 'watchlist_group'
+  symbols: string[]
+  group_id?: string | null
+}
+
 /** 多账户: 追加 ?account= 查询参数 (缺省账户由后端 default 兜底)。 */
 function accUrl(base: string, account?: string): string {
   if (!account) return base
@@ -1221,6 +1335,7 @@ export interface PaperAccount {
   stamp_tax_pct: number
   slippage_bps: number
   queue_limit_orders?: boolean
+  auto_scope?: PaperAutoScope
   status: 'active' | 'frozen'
   created_at: string
 }
@@ -1233,6 +1348,7 @@ export interface PaperAccountSummary {
   cash?: number
   latest_nav?: number | null
   created_at?: string
+  auto_scope?: PaperAutoScope
 }
 
 /** 多账户横向对比行 (GET /api/paper/compare): 概览 + 回合统计 + 定版净值
@@ -1243,6 +1359,8 @@ export interface PaperCompareRow {
   status: 'active' | 'frozen'
   initial_cash: number
   fees: { commission_pct: number; stamp_tax_pct: number; slippage_bps: number }
+  auto_scope?: PaperAutoScope
+  auto_scope_warning?: string | null
   total: number
   cash: number
   market_value: number
@@ -1328,6 +1446,8 @@ export interface PaperOverview {
   estimating?: boolean
   holdings?: PaperHolding[]
   fees?: { commission_pct: number; stamp_tax_pct: number; slippage_bps: number }
+  auto_scope?: PaperAutoScope
+  auto_scope_warning?: string | null
 }
 
 export interface PaperOrder {
@@ -1394,6 +1514,8 @@ export interface VDBasicFilter {
 
 export interface MonitorRuleOptions {
   threshold_fields: { key: string; label: string }[]
+  /** 阈值字段分组 (行情/均线/.../K线形态); 旧后端可能不返回, 前端回退平铺 */
+  threshold_groups?: { key: string; label: string; fields: { key: string; label: string }[] }[]
   builtin_signals: { key: string; label: string }[]
   custom_signals: { key: string; label: string }[]
   operators: string[]
@@ -2120,6 +2242,9 @@ export interface SettingsState {
   onboarding_completed: boolean
   // 配置文件位置 (secrets.json: AI 与数据源 Key 统一存放)
   secrets_path?: string
+  // 东方财富登录态 Cookie (可选, 仅用于 LOF/ETF 的东财兜底通道)
+  has_eastmoney_cookie?: boolean
+  eastmoney_cookie_masked?: string
   // AI 配置
   ai_provider: string
   ai_protocol?: string
@@ -2304,6 +2429,14 @@ export interface PluginKeyResult {
   api_key_masked?: string
   plugin_available?: boolean
   plugin?: PluginDataSourceItem | null
+}
+
+/** 东方财富 Cookie 保存/清除结果 (只回脱敏串, 不回明文) */
+export interface EastmoneyCookieResult {
+  ok: boolean
+  error?: string
+  has_eastmoney_cookie: boolean
+  eastmoney_cookie_masked?: string
 }
 
 export interface DatasetConfig {
@@ -2990,6 +3123,13 @@ export const api = {
   },
   clearPluginKey: (plugin: string) =>
     request<PluginKeyResult>(`/api/settings/plugin-key/${encodeURIComponent(plugin)}`, { method: 'DELETE' }),
+  saveEastmoneyCookie: (cookie: string) =>
+    request<EastmoneyCookieResult>('/api/settings/eastmoney-cookie', {
+      method: 'POST',
+      body: JSON.stringify({ cookie }),
+    }),
+  clearEastmoneyCookie: () =>
+    request<EastmoneyCookieResult>('/api/settings/eastmoney-cookie', { method: 'DELETE' }),
   testDataSource: (
     provider: string,
     dataset: string,
@@ -3404,6 +3544,31 @@ export const api = {
     request<KlineDailyLatestResponse>(
       `/api/kline/daily/latest?symbol=${encodeURIComponent(symbol)}`,
     ),
+  klinePatternMeta: () =>
+    request<{ patterns: KlinePatternMeta[] }>('/api/kline/patterns/meta'),
+  klinePatterns: (
+    symbol: string,
+    dateRange: { start: string; end: string },
+    patterns?: readonly string[],
+  ) => {
+    const params = new URLSearchParams({ symbol, start_date: dateRange.start, end_date: dateRange.end })
+    if (patterns && patterns.length > 0) params.set('patterns', patterns.join(','))
+    return request<KlinePatternsResponse>(`/api/kline/patterns?${params.toString()}`)
+  },
+  /**
+   * 筹码分布 (CYQ)。不传 date 取区间最后一根; 股票用真实换手率,
+   * ETF/LOF/指数用成交量代理 (响应里 turnover_source 标明口径)。
+   */
+  klineChips: (
+    symbol: string,
+    options: { date?: string; cyqDays?: number; accuracyFactor?: number } = {},
+  ) => {
+    const params = new URLSearchParams({ symbol })
+    if (options.date) params.set('date', options.date)
+    if (options.cyqDays) params.set('cyq_days', String(options.cyqDays))
+    if (options.accuracyFactor) params.set('accuracy_factor', String(options.accuracyFactor))
+    return request<KlineChipsResponse>(`/api/kline/chips?${params.toString()}`)
+  },
   klineDailyBatch: (symbols: string[], days = 12) =>
     request<{ data: Record<string, KlineRow[]> }>('/api/kline/daily-batch', {
       method: 'POST',
@@ -4880,6 +5045,22 @@ export const api = {
   strategyReload: () =>
     request<{ ok: boolean; count: number }>('/api/strategies/reload', { method: 'POST' }),
 
+  // ===== Recommended Strategy Pack =====
+  recommendedStrategies: (signal?: AbortSignal) =>
+    request<RecommendedStrategiesResponse>('/api/strategy-recommended', { signal }),
+
+  recommendedStrategiesInstall: (ids: string[], overwrite = false) =>
+    request<RecommendedInstallResponse>('/api/strategy-recommended/install', {
+      method: 'POST',
+      body: JSON.stringify({ ids, overwrite }),
+    }),
+
+  recommendedStrategiesPromptAck: (ids: string[] = []) =>
+    request<RecommendedStrategiesResponse>('/api/strategy-recommended/prompt-ack', {
+      method: 'POST',
+      body: JSON.stringify({ ids }),
+    }),
+
   // ===== Strategy Pool v2 (池成员 / 策略库分组与归档) =====
   strategyPoolSnapshot: (signal?: AbortSignal) =>
     request<StrategyPoolSnapshot>('/api/strategy-pool', { signal }),
@@ -5010,13 +5191,13 @@ export const api = {
   paperOverview: (account?: string) =>
     request<PaperOverview>(accUrl('/api/paper/overview', account)),
 
-  paperCreateAccount: (body: { initial_cash: number; account_id?: string; name?: string; commission_pct?: number; stamp_tax_pct?: number; slippage_bps?: number; queue_limit_orders?: boolean }) =>
+  paperCreateAccount: (body: { initial_cash: number; account_id?: string; name?: string; commission_pct?: number; stamp_tax_pct?: number; slippage_bps?: number; queue_limit_orders?: boolean; auto_scope?: PaperAutoScope }) =>
     request<{ account: PaperAccount }>('/api/paper/account', {
       method: 'POST',
       body: JSON.stringify(body),
     }),
 
-  paperSettings: (body: { queue_limit_orders?: boolean; commission_pct?: number; stamp_tax_pct?: number; slippage_bps?: number }, account?: string) =>
+  paperSettings: (body: { queue_limit_orders?: boolean; commission_pct?: number; stamp_tax_pct?: number; slippage_bps?: number; auto_scope?: PaperAutoScope }, account?: string) =>
     request<{ account: PaperAccount }>(accUrl('/api/paper/settings', account), {
       method: 'POST',
       body: JSON.stringify(body),
@@ -5077,7 +5258,7 @@ export const api = {
     request<{ ok: boolean }>(accUrl(`/api/paper/auto_rules/${encodeURIComponent(id)}`, account), { method: 'DELETE' }),
 
   /** 对比批量创建: 同本金/同费率一次开 N 个账户, 各绑一条自动跟单规则 */
-  paperArenaCreate: (body: { initial_cash: number; sources: PaperArenaSource[]; name_prefix?: string; commission_pct?: number; stamp_tax_pct?: number; slippage_bps?: number }) =>
+  paperArenaCreate: (body: { initial_cash: number; sources: PaperArenaSource[]; name_prefix?: string; commission_pct?: number; stamp_tax_pct?: number; slippage_bps?: number; auto_scope?: PaperAutoScope }) =>
     request<{ created: Array<{ account: string; name: string; rule_id: string }> }>('/api/paper/arena/batch_create', {
       method: 'POST',
       body: JSON.stringify(body),

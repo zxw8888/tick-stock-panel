@@ -230,6 +230,33 @@ ENRICHED_COLUMNS_BY_CATEGORY: dict[str, list[str]] = {
 }
 
 
+def _register_extended_metadata() -> None:
+    """把 InStock 移植指标并入列字典与分类 (模块导入时执行一次)。
+
+    不动 ``ENRICHED_COLUMNS`` 的存储语义 —— 这些列只在被显式请求时计算,
+    不落 parquet, 也不出现在 enriched 的默认输出里。
+    """
+    from app.indicators.extended import EXTENDED_BY_CATEGORY, EXTENDED_INDICATORS
+
+    for name, label in EXTENDED_INDICATORS.items():
+        ENRICHED_COLUMNS.setdefault(name, f"{label} (InStock 移植)")
+    for cat, cols in EXTENDED_BY_CATEGORY.items():
+        ENRICHED_COLUMNS_BY_CATEGORY[cat] = list(cols)
+
+
+def _register_pattern_metadata() -> None:
+    """把 61 个蜡烛形态并入列字典 (与 extended 同样的"显式请求才计算"语义)。"""
+    from app.indicators.patterns import PATTERN_LABELS
+
+    for name, label in PATTERN_LABELS.items():
+        ENRICHED_COLUMNS.setdefault(name, f"{label} (K线形态)")
+    ENRICHED_COLUMNS_BY_CATEGORY["pattern"] = list(PATTERN_LABELS)
+
+
+_register_extended_metadata()
+_register_pattern_metadata()
+
+
 def _ema_alpha(span: int) -> float:
     return 2.0 / (span + 1)
 
@@ -364,7 +391,28 @@ def _resolve_needed(needed: set[str] | None) -> set[str]:
             if deps and not deps <= want:
                 want |= deps
                 changed = True
+            elif target in _extended_columns():
+                # InStock 移植指标依赖核心指标 (prev_close/ma10/atr_14/rsi_14 ...)
+                from app.indicators.extended import CORE_DEPS
+
+                if not want >= CORE_DEPS:
+                    want |= set(CORE_DEPS)
+                    changed = True
     return want
+
+
+def _extended_columns() -> frozenset[str]:
+    """InStock 移植指标列名 (懒加载, 避免与 extended.py 循环导入)。"""
+    from app.indicators.extended import EXTENDED_COLUMNS
+
+    return frozenset(EXTENDED_COLUMNS)
+
+
+def _pattern_columns() -> frozenset[str]:
+    """蜡烛形态列名 (懒加载)。"""
+    from app.indicators.patterns import PATTERN_COLUMNS
+
+    return frozenset(PATTERN_COLUMNS)
 
 
 def compute_indicators(
@@ -389,6 +437,13 @@ def compute_indicators(
 
     import time as _time
     _t0 = _time.perf_counter()
+
+    ext_want: set[str] = set()
+    if needed is not None:
+        ext_want = set(needed) & set(_extended_columns())
+    pattern_want: set[str] = set()
+    if needed is not None:
+        pattern_want = set(needed) & set(_pattern_columns())
 
     want = _resolve_needed(needed)
 
@@ -590,6 +645,20 @@ def compute_indicators(
                   "_rsi_avg_gain_24", "_rsi_avg_loss_24"]
     df = df.drop([c for c in _temp_cols if c in df.columns])
 
+    # Pass 7: InStock 移植指标 (仅当显式请求时计算, 默认零开销)
+    if ext_want:
+        from app.indicators.extended import compute_extended
+
+        df = compute_extended(
+            df, needed=ext_want, assume_sorted=True, fill_warmup_zero=True
+        )
+
+    # Pass 8: TA-Lib 蜡烛形态 (61 列, 同样只在显式请求时计算)
+    if pattern_want:
+        from app.indicators.patterns import compute_patterns_frame
+
+        df = compute_patterns_frame(df, needed=pattern_want, assume_sorted=True)
+
     _elapsed = (_time.perf_counter() - _t0) * 1000
     import logging as _logging
     _logging.getLogger(__name__).debug("compute_indicators: %.1fms, %d rows", _elapsed, len(df))
@@ -614,9 +683,55 @@ LIMIT_SIGNAL_OUTPUTS: frozenset[str] = frozenset({
 
 _LIMIT_PRICE_COLUMNS = frozenset({"limit_up_price", "limit_down_price"})
 
+def _extended_indicator_columns() -> frozenset[str]:
+    """InStock 移植指标中可作为策略输入列的集合。
+
+    排除纯中间量 (m_price_sf1 / high_delta / pdm / emv_em / rvi_x ...):
+    它们是别的指标的中间步骤, 不构成独立交易含义, 也不该出现在字段选择器里。
+    """
+    from app.indicators.extended import EXTENDED_INPUT_COLUMNS
+
+    return frozenset(EXTENDED_INPUT_COLUMNS)
+
+
+def _pattern_input_columns() -> frozenset[str]:
+    """蜡烛形态列 (全部可作策略输入)。"""
+    from app.indicators.patterns import PATTERN_COLUMNS
+
+    return frozenset(PATTERN_COLUMNS)
+
+
 INDICATOR_COLUMNS: frozenset[str] = frozenset(
-    col for col in _ALL_INDICATOR_COLS if not col.startswith("_")
+    {col for col in _ALL_INDICATOR_COLS if not col.startswith("_")}
+    | set(_extended_indicator_columns())
+    | set(_pattern_input_columns())
 )
+
+
+def ensure_indicator_columns(
+    df: pl.DataFrame,
+    columns,
+    *,
+    assume_sorted: bool = False,
+) -> pl.DataFrame:
+    """按需补齐 df 缺失的指标列 (核心 / 扩展 / 蜡烛形态), 已有列不动。
+
+    供「条件里引用了某个指标, 但帧上还没有该列」的路径使用: 自定义信号注入、
+    监控规则阈值条件、策略叠加条件。只计算缺失的列, 因此引用 1 个形态时
+    只付 1 列的代价, 不会把 61 列全算一遍。
+
+    不在 ``INDICATOR_COLUMNS`` 里的名字 (行情列 / 注册表因子 / ext_* 扩展表列)
+    一律忽略 —— 它们各有自己的装配路径, 不在这里静默制造空列。
+    """
+    if df.is_empty():
+        return df
+    wanted = set(columns)
+    missing = wanted & INDICATOR_COLUMNS
+    if missing:
+        missing -= set(df.columns)
+    if not missing:
+        return df
+    return compute_indicators(df, needed=missing, assume_sorted=assume_sorted)
 
 
 def get_signal_dependencies() -> dict[str, frozenset[str]]:

@@ -67,6 +67,8 @@ def test_eastmoney_daily_columns_and_volume_unit(monkeypatch):
         def get(self, *a, **kw):
             return _Resp()
 
+    # 雪球主源返回空 → 走东财分支
+    monkeypatch.setattr(lof_data, "_xueqiu_daily", lambda *a, **kw: pl.DataFrame())
     monkeypatch.setattr(httpx, "Client", _Client)
     df = lof_data.fetch_daily(["160216.SZ"], start=date(2026, 11, 18), end=date(2026, 11, 18))
     assert df.height == 1
@@ -77,6 +79,113 @@ def test_eastmoney_daily_columns_and_volume_unit(monkeypatch):
     assert row["low"] == 0.612
     assert row["volume"] == 30511  # 已是手
     assert row["amount"] == 1877879.096
+
+
+def test_xueqiu_daily_volume_share_to_hand(monkeypatch):
+    """雪球日K volume 是股 → 出口必须 /100 折回手; 不得与东财口径混用。"""
+    import httpx
+
+    payload = {
+        "data": {
+            "symbol": "SZ160216",
+            "column": ["timestamp", "volume", "open", "high", "low", "close",
+                       "chg", "percent", "turnoverrate", "amount"],
+            "item": [
+                [1795363200000, 3649642, 0.539, 0.543, 0.537, 0.54, 0.003, 0.56, 2.12, 1969688.0],
+            ],
+        }
+    }
+
+    class _Resp:
+        status_code = 200
+        headers: dict = {}
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return payload
+
+    class _Client:
+        def __init__(self, *a, **kw):
+            pass
+
+        def get(self, *a, **kw):
+            return _Resp()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(httpx, "Client", _Client)
+    df = lof_data._xueqiu_daily(["160216.SZ"], date(2026, 11, 1), date(2026, 11, 23))
+    assert df.height == 1
+    row = df.row(0, named=True)
+    assert row["symbol"] == "160216.SZ"
+    assert row["date"] == date(2026, 11, 23)
+    assert row["close"] == 0.54
+    assert row["volume"] == 36496  # 3649642 股 → 36496 手
+    assert row["amount"] == 1969688.0
+
+
+def test_daily_prefers_xueqiu_and_skips_eastmoney(monkeypatch):
+    """雪球覆盖全部标的后不得再打东财; 东财通道被显式打桩为抛错。"""
+    xq = pl.DataFrame({
+        "symbol": ["160216.SZ"], "date": [date(2026, 11, 23)],
+        "open": [0.539], "high": [0.543], "low": [0.537], "close": [0.54],
+        "volume": [36496], "amount": [1969688.0],
+    })
+    monkeypatch.setattr(lof_data, "_xueqiu_daily", lambda *a, **kw: xq)
+
+    def _boom(*a, **kw):
+        raise AssertionError("雪球已覆盖, 不应调用东财")
+
+    monkeypatch.setattr(lof_data, "_eastmoney_daily", _boom)
+    df = lof_data.fetch_daily(["160216.SZ"], start=date(2026, 11, 1), end=date(2026, 11, 23))
+    assert df.height == 1
+
+
+def test_realtime_tencent_units_and_fallback(monkeypatch):
+    """腾讯快照: volume 已是手, amount 万元→元, 百分比→小数; 且是 fuyao 之后的兜底。"""
+    import httpx
+
+    body = (
+        'v_sz160216="1~国泰商品LOF~160216~0.540~0.537~0.539~36496~18248~18248~'
+        '0.539~100~0.538~200~0.537~300~0.536~400~0.535~500~0.540~100~0.541~200~'
+        '0.542~300~0.543~400~0.544~500~~20261123150000~0.003~0.56~0.543~0.537~'
+        '0.540/36496/1969688~36496~197~2.12~~~0.543~0.537~1.11~19.70~";'
+    )
+
+    class _Resp:
+        status_code = 200
+        text = body
+        encoding = "gbk"
+
+        def raise_for_status(self):
+            pass
+
+    class _Client:
+        def __init__(self, *a, **kw):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def get(self, *a, **kw):
+            return _Resp()
+
+    monkeypatch.setattr(lof_data, "_fuyo_key", lambda: "")
+    monkeypatch.setattr(httpx, "Client", _Client)
+    recs = lof_data.fetch_realtime(["160216.SZ"])
+    assert len(recs) == 1
+    r = recs[0]
+    assert r["symbol"] == "160216.SZ"
+    assert r["last_price"] == 0.54
+    assert r["volume"] == 36496  # 手, 不再换算
+    assert r["amount"] == 197 * 10_000.0  # 万元 → 元
+    assert round(r["change_pct"], 4) == 0.0056  # 0.56% → 小数制
 
 
 def test_repository_lof_roundtrip(repo, monkeypatch):

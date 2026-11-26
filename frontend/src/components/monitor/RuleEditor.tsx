@@ -396,6 +396,7 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
     })
 
   const thresholdFields = options.data?.threshold_fields ?? []
+  const thresholdGroups = options.data?.threshold_groups ?? []
   const operators = options.data?.operators ?? ['>', '>=', '<', '<=', '==', '!=']
   const selectedSignals = draft.conditions.filter(c => c.op === 'truth').map(c => c.field)
   const hasIntradaySignal = selectedSignals.some(signal => MONITOR_INTRADAY_SIGNAL_OPTIONS.includes(signal))
@@ -421,10 +422,9 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
   const visibleTypes = (options.data?.types ?? []).filter(
     t => t.key !== 'date' && (assetType !== 'index' || t.key === 'signal' || t.key === 'price'),
   )
-  // 指数: 作用范围仅 symbols (无全市场/板块语义); ETF: 不支持自选分组 (分组为个股)
+  // 指数: 作用范围仅 symbols (无全市场/板块语义); ETF 与个股均支持自选分组动态作用域
   const visibleScopes = (options.data?.scopes ?? []).filter(
-    s => (assetType !== 'index' || s.key === 'symbols')
-      && (assetType === 'stock' || s.key !== 'watchlist_group'),
+    s => (assetType !== 'index' || s.key === 'symbols'),
   )
   const sectorKind = draft.sector_kind ?? 'index'
   const sectorTargets = options.data?.sector_targets?.[sectorKind] ?? []
@@ -519,7 +519,7 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
                   <div key={i} className="flex items-center gap-1.5">
                     <span className="text-[10px] text-muted/60 w-6 text-right shrink-0">{i === 0 && selectedSignals.length === 0 ? '当' : draft.logic === 'and' ? '且' : '或'}</span>
                     <select value={c.field} onChange={e => updateCond(realIdx, { field: e.target.value })} className="flex-1 h-7 px-1.5 rounded bg-base border border-border text-[11px] text-foreground focus:outline-none focus:border-accent/50">
-                      {thresholdFields.map(f => <option key={f.key} value={f.key}>{f.label}</option>)}
+                      <ThresholdFieldOptions fields={thresholdFields} groups={thresholdGroups} />
                     </select>
                     <select value={c.op} onChange={e => updateCond(realIdx, { op: e.target.value })} className="w-12 h-7 px-1 rounded bg-base border border-border text-[11px] font-mono text-foreground text-center focus:outline-none focus:border-accent/50">
                       {operators.map(op => <option key={op} value={op}>{op}</option>)}
@@ -583,10 +583,8 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
                     strategy_id: null,
                     symbols: [],
                     type: t === 'index' && d.type !== 'signal' && d.type !== 'price' ? 'signal' : d.type,
-                    // 指数仅指定标的; ETF 不支持分组作用域 (自选分组为个股)
-                    scope: t === 'index' || (t !== 'stock' && d.scope === 'watchlist_group')
-                      ? 'symbols'
-                      : d.scope,
+                    // 指数仅指定标的; ETF 与个股均可保留分组作用域
+                    scope: t === 'index' ? 'symbols' : d.scope,
                   }))
                   setStrategyQuery('')
                   setStrategyCategory('all')
@@ -1307,7 +1305,7 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
                   <div key={i} className="flex items-center gap-1.5">
                     <span className="text-[10px] text-muted/60 w-6 text-right shrink-0">{i === 0 && selectedSignals.length === 0 ? '当' : draft.logic === 'and' ? '且' : '或'}</span>
                     <select value={c.field} onChange={e => updateCond(realIdx, { field: e.target.value })} className="w-32 h-7 px-1.5 rounded bg-base border border-border text-[11px] text-foreground focus:outline-none focus:border-accent/50">
-                      {thresholdFields.map(f => <option key={f.key} value={f.key}>{f.label}</option>)}
+                      <ThresholdFieldOptions fields={thresholdFields} groups={thresholdGroups} />
                     </select>
                     <select value={c.op} onChange={e => updateCond(realIdx, { op: e.target.value })} className="w-12 h-7 px-1 rounded bg-base border border-border text-[11px] font-mono text-foreground text-center focus:outline-none focus:border-accent/50">
                       {operators.map(op => <option key={op} value={op}>{op}</option>)}
@@ -1620,5 +1618,30 @@ export function RuleEditor({ rule, preset, simple, onClose, onSaved }: Props) {
         </button>
       </div>
     </div>
+  )
+}
+
+/**
+ * 阈值字段下拉选项: 后端给了分组就按 optgroup 渲染 (61 个 K线形态平铺会把
+ * 下拉撑成几百行), 没给分组时回退平铺, 兼容旧后端。
+ */
+export function ThresholdFieldOptions({
+  fields,
+  groups,
+}: {
+  fields: { key: string; label: string }[]
+  groups: { key: string; label: string; fields: { key: string; label: string }[] }[]
+}) {
+  if (groups.length === 0) {
+    return <>{fields.map(f => <option key={f.key} value={f.key}>{f.label}</option>)}</>
+  }
+  return (
+    <>
+      {groups.map(g => (
+        <optgroup key={g.key} label={g.label}>
+          {g.fields.map(f => <option key={f.key} value={f.key}>{f.label}</option>)}
+        </optgroup>
+      ))}
+    </>
   )
 }

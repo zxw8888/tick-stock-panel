@@ -38,7 +38,7 @@ _MAX_STR_RIGHT = 64
 # 与 ENRICHED_COLUMNS 的数值列保持一致，排除 symbol/date/name 等非数值列。
 # raw_* 为存储列(未复权原始价); limit_*_price 为涨跌停判定价运行时列
 # (compute_limit_signals 产出, 已含 0.005 交易所容差)。
-ALLOWED_FIELDS: frozenset[str] = frozenset({
+_CORE_ALLOWED_FIELDS: frozenset[str] = frozenset({
     # 行情
     "open", "high", "low", "close", "volume", "amount", "turnover_rate",
     "consecutive_limit_ups", "consecutive_limit_downs",
@@ -65,6 +65,25 @@ ALLOWED_FIELDS: frozenset[str] = frozenset({
     # 异动偏离 (交易所异动规则口径, 运行时列)
     "deviate_3d", "deviate_10d", "deviate_30d",
 })
+
+
+def _extended_allowed_fields() -> frozenset[str]:
+    """InStock 移植指标中可作为信号条件的列。"""
+    from app.indicators.extended import EXTENDED_INPUT_COLUMNS
+
+    return frozenset(EXTENDED_INPUT_COLUMNS)
+
+
+def _pattern_allowed_fields() -> frozenset[str]:
+    """TA-Lib 蜡烛形态列 (-100/0/+100), 可作为信号条件。"""
+    from app.indicators.patterns import PATTERN_COLUMNS
+
+    return frozenset(PATTERN_COLUMNS)
+
+
+ALLOWED_FIELDS: frozenset[str] = (
+    _CORE_ALLOWED_FIELDS | _extended_allowed_fields() | _pattern_allowed_fields()
+)
 
 # 运算符 → Polars 表达式构造器（输入 col_expr, value）
 _OP_BUILDERS = {
@@ -543,12 +562,25 @@ def inject(
     """
     if df.is_empty() or not exprs:
         return df
+    wanted = {
+        name: expr
+        for name, expr in exprs.items()
+        if needed is None or name in needed
+    }
+    # 表达式引用了蜡烛形态 / InStock 扩展指标这类「按需计算」列时, 帧上原本
+    # 没有这些列 (compute_indicators 默认不算)。先按需补齐, 否则信号会被当成
+    # 「缺列」静默跳过 —— 形态条件永远不触发。
+    referenced: set[str] = set()
+    for expr in wanted.values():
+        referenced |= _expr_root_columns(expr)
+    if referenced - set(df.columns):
+        from app.indicators.pipeline import ensure_indicator_columns
+
+        df = ensure_indicator_columns(df, referenced, assume_sorted=True)
+
     cols = set(df.columns)
     add: dict[str, pl.Expr] = {}
-    for name, expr in exprs.items():
-        if needed is not None and name not in needed:
-            continue
-        # 提取该表达式引用的所有字段列，缺失则跳过（避免运行时报错）
+    for name, expr in wanted.items():
         required = _expr_root_columns(expr)
         if required.issubset(cols):
             add[name] = expr

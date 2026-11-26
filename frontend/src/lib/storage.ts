@@ -70,6 +70,18 @@ export const storage = {
   /** 个股详情日K异动显示方式 */
   stockDailyMarkerStyle: kv<DailyMarkerStyle>('stock_daily_marker_style'),
 
+  /** 个股详情日K形态标注: 开关 + 选中形态列表 (空列表 = 未选) */
+  stockDailyPatternMarkers: kv<{ enabled: boolean; selected: string[] }>('stock_daily_pattern_markers'),
+
+  /** 个股详情日K筹码分布面板开关 */
+  stockDailyChipsPanel: kv<boolean>('stock_daily_chips_panel'),
+
+  /** 个股分析页形态标注: 开关 + 选中形态列表 */
+  stockAnalysisPatternMarkers: kv<{ enabled: boolean; selected: string[] }>('stock_analysis_pattern_markers'),
+
+  /** 个股分析页筹码分布面板开关 */
+  stockAnalysisChipsPanel: kv<boolean>('stock_analysis_chips_panel'),
+
   /** 个股详情多日分时周期 */
   stockPreviewIntradayDays: kv<number>('stock_preview_intraday_days'),
 

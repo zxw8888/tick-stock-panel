@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Sparkles, LineChart, History as HistoryIcon, Loader2, ExternalLink, Bell, AlertTriangle } from 'lucide-react'
 import { PageHeader } from '@/components/PageHeader'
@@ -7,10 +7,14 @@ import { StockFinancialSearch } from '@/components/financials/StockFinancialSear
 import { StockPreviewDialog } from '@/components/StockPreviewDialog'
 import { LastStockChip } from '@/components/LastStockChip'
 import { AnalysisKChart, type PriceLevel, type LevelType } from '@/components/stock-analysis/AnalysisKChart'
+import { PatternPicker } from '@/components/chart/PatternPicker'
+import { ChipsPanel } from '@/components/chart/ChipsPanel'
 import { PriceAlertDialog } from '@/components/stock-analysis/PriceAlertDialog'
 import { api } from '@/lib/api'
 import { useLastStock } from '@/lib/useLastStock'
 import { QK } from '@/lib/queryKeys'
+import { storage } from '@/lib/storage'
+import { buildPatternMarkers } from '@/lib/kline-patterns'
 import { toast } from '@/components/Toast'
 import {
   startAnalysis, findTodayReport, useHistoryReports,
@@ -195,6 +199,64 @@ function StockAnalysisBoard({ symbol }: { symbol: string }) {
     staleTime: 60_000,
   })
 
+  const rows = kline.data?.rows ?? []
+  const patternRange = useMemo(() => {
+    const first = rows[0]?.date
+    const last = rows[rows.length - 1]?.date
+    if (!first || !last) return null
+    return { start: String(first).slice(0, 10), end: String(last).slice(0, 10) }
+  }, [rows])
+
+  // 形态标注: 开关 + 选中形态 (持久化, 默认关闭, 打开时才请求后端)
+  const [patternState, setPatternState] = useState<{ enabled: boolean; selected: string[] }>(() => {
+    const saved = storage.stockAnalysisPatternMarkers.get({ enabled: false, selected: [] })
+    return {
+      enabled: saved?.enabled === true,
+      selected: Array.isArray(saved?.selected) ? saved.selected.filter((k): k is string => typeof k === 'string') : [],
+    }
+  })
+  const [showChips, setShowChips] = useState<boolean>(() => storage.stockAnalysisChipsPanel.get(false))
+  const [chipsDate, setChipsDate] = useState<string | null>(null)
+
+  const patternMeta = useQuery({
+    queryKey: QK.klinePatternsMeta,
+    queryFn: api.klinePatternMeta,
+    enabled: patternState.enabled,
+    staleTime: Infinity,
+  })
+  const patternsQuery = useQuery({
+    queryKey: QK.klinePatterns(symbol, patternRange?.start ?? '', patternRange?.end ?? '', patternState.selected),
+    queryFn: () => api.klinePatterns(symbol, patternRange!, patternState.selected),
+    enabled: !!symbol && patternState.enabled && patternState.selected.length > 0 && !!patternRange,
+    staleTime: 5 * 60_000,
+  })
+  const patternMarkers = useMemo(
+    () => patternState.enabled
+      ? buildPatternMarkers(patternsQuery.data?.rows ?? [], {
+          selected: patternState.selected,
+          meta: patternsQuery.data?.patterns?.length
+            ? patternsQuery.data.patterns
+            : patternMeta.data?.patterns ?? [],
+        })
+      : [],
+    [patternState.enabled, patternState.selected, patternsQuery.data, patternMeta.data],
+  )
+
+  const updatePatternState = (patch: Partial<{ enabled: boolean; selected: string[] }>) => {
+    setPatternState(prev => {
+      const next = { enabled: patch.enabled ?? prev.enabled, selected: patch.selected ?? prev.selected }
+      storage.stockAnalysisPatternMarkers.set(next)
+      return next
+    })
+  }
+  const toggleChips = () => {
+    setShowChips(prev => {
+      storage.stockAnalysisChipsPanel.set(!prev)
+      if (prev) setChipsDate(null)
+      return !prev
+    })
+  }
+
   if (kline.isLoading) {
     return <div className="flex items-center justify-center py-20"><Loader2 className="h-5 w-5 animate-spin text-muted" /></div>
   }
@@ -209,7 +271,6 @@ function StockAnalysisBoard({ symbol }: { symbol: string }) {
     )
   }
 
-  const rows = kline.data?.rows ?? []
   if (rows.length === 0) {
     return <EmptyState icon={LineChart} title="暂无日 K 数据" hint="该标的尚未同步日 K,请先在数据页或自选页同步。" />
   }
@@ -229,6 +290,39 @@ function StockAnalysisBoard({ symbol }: { symbol: string }) {
           <div className="flex items-center gap-2 min-w-0">
             <LineChart className="h-4 w-4 text-sky-400 shrink-0" />
             <span className="text-sm font-medium text-foreground">关键价位分析</span>
+            <div className="ml-3 flex items-center gap-1">
+              <button
+                type="button"
+                aria-pressed={patternState.enabled}
+                onClick={() => updatePatternState({ enabled: !patternState.enabled })}
+                title={patternState.enabled ? '隐藏K线上的蜡烛形态标注' : '显示K线上的蜡烛形态标注'}
+                className={`rounded px-2 py-0.5 text-[11px] font-mono transition-colors ${
+                  patternState.enabled ? 'bg-[#F0724A]/10 text-[#F0724A]' : 'bg-elevated text-secondary hover:text-foreground'
+                }`}
+              >
+                形态
+              </button>
+              {patternState.enabled && (
+                <PatternPicker
+                  meta={patternMeta.data?.patterns ?? []}
+                  selected={patternState.selected}
+                  onChange={selected => updatePatternState({ selected })}
+                  disabled={patternMeta.isLoading}
+                  defaultOpen={patternState.selected.length === 0}
+                />
+              )}
+              <button
+                type="button"
+                aria-pressed={showChips}
+                onClick={toggleChips}
+                title={showChips ? '隐藏筹码分布面板' : '显示筹码分布面板 (CYQ)'}
+                className={`rounded px-2 py-0.5 text-[11px] font-mono transition-colors ${
+                  showChips ? 'bg-[#FACC15]/10 text-[#FACC15]' : 'bg-elevated text-secondary hover:text-foreground'
+                }`}
+              >
+                筹码
+              </button>
+            </div>
           </div>
           <div className="flex items-baseline gap-2 shrink-0">
             <span className="text-[10px] text-muted">{rows.length} 个交易日</span>
@@ -241,15 +335,32 @@ function StockAnalysisBoard({ symbol }: { symbol: string }) {
         </div>
       </div>
       <div className="p-3">
-        <AnalysisKChart
-          rows={rows}
-          levels={levels}
-          series={levelsQ.data?.series}
-          seriesDates={levelsQ.data?.dates}
-          defaultLevelTypes={['sr', 'pivot', 'keltner_s']}
-          scopeKey={symbol}
-          height={480}
-        />
+        <div className={showChips ? 'flex items-start gap-3' : undefined}>
+          <div className="min-w-0 flex-1">
+            <AnalysisKChart
+              rows={rows}
+              levels={levels}
+              series={levelsQ.data?.series}
+              seriesDates={levelsQ.data?.dates}
+              defaultLevelTypes={['sr', 'pivot', 'keltner_s']}
+              markers={patternMarkers}
+              onDateClick={date => { if (showChips) setChipsDate(String(date).slice(0, 10)) }}
+              scopeKey={symbol}
+              height={480}
+            />
+          </div>
+          {showChips && (
+            <aside className="w-[190px] shrink-0 border-l border-border/40 pl-3">
+              <div className="mb-1 text-[11px] font-medium text-foreground">筹码分布</div>
+              <ChipsPanel
+                symbol={symbol}
+                date={chipsDate}
+                height={400}
+                footer={chipsDate ? '点击K线切换日期' : '当前为最后一根K线'}
+              />
+            </aside>
+          )}
+        </div>
       </div>
     </div>
   )

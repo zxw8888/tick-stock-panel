@@ -32,6 +32,7 @@ export function strategyChoiceGroups<T extends StrategyChoice>(items: readonly T
 export const STRATEGY_LIBRARY_QUERY_KEYS = [
   QK.strategyPool, QK.strategyList().slice(0, 1), QK.screenerStrategies().slice(0, 1),
   QK.strategyLinkOptions(), QK.strategyDetail('').slice(0, 1), QK.resourceCatalog,
+  QK.recommendedStrategies,
 ]
 const CHANGE_KEY = 'tsp-strategy-library-changed'
 

@@ -74,6 +74,7 @@ export const QK = {
   strategyPool:         ['strategy-pool'] as const,
   strategyList:         (assetType: string = 'all', timeframe = '1d', includeResearch = false) =>
                           ['strategies', assetType, timeframe, includeResearch] as const,
+  recommendedStrategies: ['strategy-recommended'] as const,
   screenerCachedSummary: ['screener-cached', 'summary'] as const,
   screenerCachedResult: (strategyId: string, asOf?: string, ext?: string) => ['screener-cached', 'strategy', strategyId, asOf ?? '', ext ?? ''] as const,
   screenerCached:       (asOf?: string, ext?: string) => ['screener-cached', 'all', asOf ?? '', ext ?? ''] as const,
@@ -129,6 +130,11 @@ export const QK = {
   // Kline
   kline:                (symbol: string, start: string, end: string, extColumns?: string) =>
                            ['kline', symbol, start, end, extColumns ?? ''] as const,
+  klinePatterns:        (symbol: string, start: string, end: string, patterns?: readonly string[]) =>
+                           ['kline-patterns', symbol, start, end, patterns?.join(',') ?? ''] as const,
+  klinePatternsMeta:    ['kline-patterns-meta'] as const,
+  klineChips:           (symbol: string, date?: string | null, cyqDays?: number) =>
+                           ['kline-chips', symbol, date ?? '', cyqDays ?? 0] as const,
   // 批量标的名称查询键: 排序后 join — 同一集合不同来源顺序 (draft/分组成员/
   // 持仓+订单合并) 得到同一键, 复用缓存而不是各拼各的重复请求。
   instrumentNames:      (symbols: readonly string[]) =>

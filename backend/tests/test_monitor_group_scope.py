@@ -47,8 +47,10 @@ def test_group_scope_validation():
         monitor_rules.validate(_group_rule(group_id=None))
     with pytest.raises(ValueError, match="自选分组"):
         monitor_rules.validate(_group_rule(group_id="  "))
-    with pytest.raises(ValueError, match="仅支持个股"):
-        monitor_rules.validate(_group_rule(asset_type="etf"))
+    # ETF 与个股均支持分组作用域 (ETF 有独立评估轮)
+    monitor_rules.validate(_group_rule(asset_type="etf"))
+    with pytest.raises(ValueError, match="仅支持个股与 ETF"):
+        monitor_rules.validate(_group_rule(asset_type="lof"))
     # 分时穿越信号仅支持指定标的 (沿用既有限制)
     with pytest.raises(ValueError, match="分时穿越"):
         monitor_rules.validate(_group_rule(
@@ -65,6 +67,13 @@ def test_normalize_group_scope_fields():
     # 非分组作用域: 清掉残留 group_id
     r = monitor_rules.normalize(_group_rule(scope="all"))
     assert r["group_id"] is None
+
+
+def test_rule_signature_includes_group_id():
+    """换分组后签名必须不同, 否则旧结果池/告警态被复用导致误报。"""
+    a = MonitorRuleEngine._rule_state_signature(_group_rule(asset_type="etf", group_id="g1"))
+    b = MonitorRuleEngine._rule_state_signature(_group_rule(asset_type="etf", group_id="g2"))
+    assert a != b
 
 
 # ── 引擎: 动态成员过滤 ───────────────────────────────────
@@ -93,6 +102,31 @@ def test_engine_group_scope_dynamic_members(monkeypatch, tmp_path):
     watchlist.remove_from_group("300750.SZ", gid)
     events = eng.evaluate(df)
     assert "300750.SZ" not in {e["symbol"] for e in events}
+
+
+def test_engine_group_scope_etf_dynamic(monkeypatch, tmp_path):
+    """ETF 分组作用域: 成员增删下一轮自动跟随 (与个股同机制)。"""
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    _, group = watchlist.create_group("债券池")
+    gid = group["id"]
+    watchlist.add("511020.SH", group_id=gid)
+
+    eng = MonitorRuleEngine()
+    eng.set_rules([_group_rule(group_id=gid, asset_type="etf")])
+    df = pl.DataFrame({
+        "symbol": ["511020.SH", "511090.SH", "510300.SH"],
+        "name": ["国债ETF", "30年国债ETF", "沪深300ETF"],
+        "close": [120.0, 121.0, 4.0],
+        "change_pct": [0.1, 0.2, 1.0],
+        "rsi_14": [40.0, 50.0, 60.0],
+    })
+    assert {e["symbol"] for e in eng.evaluate(df, asset_type="etf")} == {"511020.SH"}
+
+    watchlist.add("511090.SH", group_id=gid)
+    assert {e["symbol"] for e in eng.evaluate(df, asset_type="etf")} == {"511020.SH", "511090.SH"}
+
+    watchlist.remove_from_group("511020.SH", gid)
+    assert {e["symbol"] for e in eng.evaluate(df, asset_type="etf")} == {"511090.SH"}
 
 
 def test_engine_group_scope_missing_group_fail_closed(monkeypatch, tmp_path):

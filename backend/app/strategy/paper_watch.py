@@ -30,19 +30,46 @@ def is_paper_watch_event(ev: dict) -> bool:
     return str(ev.get("rule_id") or "").startswith(PAPER_WATCH_RULE_PREFIX)
 
 
-def synthetic_rule_id(strategy_id: str) -> str:
-    return f"{PAPER_WATCH_RULE_PREFIX}{strategy_id}"
+def synthetic_rule_id(strategy_id: str, scope_key: str = "all") -> str:
+    """合成规则 id: 全市场沿用旧 id 兼容存量, 受限范围附加 scope 后缀。"""
+    base = f"{PAPER_WATCH_RULE_PREFIX}{strategy_id}"
+    return base if scope_key == "all" else f"{base}:{scope_key}"
 
 
-def _make_rule(strategy_id: str) -> dict:
+def scope_key_from_rule_id(rule_id: str, strategy_id: str | None = None) -> str | None:
+    """从合成事件 rule_id 还原 scope_key; 非合成规则返回 None。"""
+    rid = str(rule_id or "")
+    if not rid.startswith(PAPER_WATCH_RULE_PREFIX):
+        return None
+    rest = rid[len(PAPER_WATCH_RULE_PREFIX):]
+    if strategy_id and rest.startswith(f"{strategy_id}:"):
+        return rest[len(strategy_id) + 1:] or "all"
+    if ":" in rest:
+        return rest.rsplit(":", 1)[1]
+    return "all"
+
+
+def _make_rule(strategy_id: str, cfg: dict | None = None) -> dict:
+    from app.strategy import paper
+
+    cfg = paper.normalize_auto_scope(cfg)
+    key = paper.scope_key(cfg)
+    scope = cfg["scope"]
+    label = {
+        "all": "全市场",
+        "symbols": f"指定标的({len(cfg['symbols'])}只)",
+        "watchlist_group": f"自选分组({cfg['group_id']})",
+    }[scope]
     return {
-        "id": synthetic_rule_id(strategy_id),
-        "name": f"模拟盘自动评估 · {strategy_id}",
+        "id": synthetic_rule_id(strategy_id, key),
+        "name": f"模拟盘自动评估 · {strategy_id} · {label}",
         "type": "strategy",
         "strategy_id": strategy_id,
         "asset_type": "stock",
-        # scope 默认 "symbols" 且空列表会把候选过滤成空, 必须显式全市场
-        "scope": "all",
+        # scope 默认 "symbols" 且空列表会把候选过滤成空, 必须显式给出范围
+        "scope": scope,
+        "symbols": list(cfg["symbols"]),
+        "group_id": cfg["group_id"],
         "enabled": True,
         "notify_events": list(_NOTIFY_EVENTS),
     }
@@ -65,23 +92,32 @@ def sync_from_state(app_state: Any, data_dir: Path) -> dict[str, Any] | None:
         return None
 
 
-def watched_strategy_ids(data_dir: Path) -> set[str]:
-    """全部账户「启用的 strategy 型自动跟单规则」绑定的策略 id 集合。"""
+def watched_strategy_scopes(data_dir: Path) -> dict[str, dict[str, dict]]:
+    """策略 id → {scope_key: 范围配置}; 同一策略不同账户范围共用范围时只评估一次。"""
     from app.strategy import paper, paper_auto
 
-    ids: set[str] = set()
+    out: dict[str, dict[str, dict]] = {}
     for acc_id in paper.list_account_ids(data_dir):
+        cfg = paper.get_auto_scope(data_dir, acc_id)
+        key = paper.scope_key(cfg)
         for rule in paper_auto.load_auto_rules(data_dir, acc_id, enabled_only=True):
             if rule.get("match_kind") == "strategy" and rule.get("match_id"):
-                ids.add(str(rule["match_id"]))
-    return ids
+                sid = str(rule["match_id"])
+                out.setdefault(sid, {}).setdefault(key, cfg)
+    return out
+
+
+def watched_strategy_ids(data_dir: Path) -> set[str]:
+    """全部账户「启用的 strategy 型自动跟单规则」绑定的策略 id 集合。"""
+    return set(watched_strategy_scopes(data_dir))
 
 
 def sync(data_dir: Path, monitor_engine: Any, strategy_engine: Any) -> dict[str, Any]:
-    """把「未被真监控规则覆盖的绑定策略」增量注入/移出评估循环 (幂等)。
+    """把「未被真监控规则覆盖的绑定策略×范围」增量注入/移出评估循环 (幂等)。
 
     必须在每次 set_rules (全量覆盖会清掉合成规则) 之后重新调用 —
-    接线点见 main 启动 / monitor_rules._sync_engine / paper 规则 CRUD / 策略删除。
+    接线点见 main 启动 / monitor_rules._sync_engine / paper 规则 CRUD / 策略删除 /
+    账户范围变更。
     """
     covered = {
         str(r.get("strategy_id"))
@@ -90,30 +126,42 @@ def sync(data_dir: Path, monitor_engine: Any, strategy_engine: Any) -> dict[str,
         and r.get("type") == "strategy"
         and not str(r.get("id") or "").startswith(PAPER_WATCH_RULE_PREFIX)
     }
-    want: set[str] = set()
-    for sid in watched_strategy_ids(data_dir):
+    want: dict[str, dict] = {}
+    for sid, scopes in watched_strategy_scopes(data_dir).items():
         if sid in covered:
             continue
         try:
             strategy_engine.get(sid)
         except ValueError:
             continue  # 策略已删除/失效, 下次 sync 前引擎侧本就会跳过它
-        want.add(sid)
+        for cfg in scopes.values():
+            rule = _make_rule(sid, cfg)
+            want[rule["id"]] = rule
 
     current = {
-        str(r.get("strategy_id"))
+        str(rid): r
         for rid, r in monitor_engine.rules.items()
         if str(rid).startswith(PAPER_WATCH_RULE_PREFIX)
     }
-    added = sorted(want - current)
-    removed = sorted(current - want)
-    for sid in added:
-        monitor_engine.add_rule(_make_rule(sid))
-    for sid in removed:
-        monitor_engine.remove_rule(synthetic_rule_id(sid))
-    if added or removed:
+    added_rule_ids = sorted(set(want) - set(current))
+    removed_rule_ids = sorted(set(current) - set(want))
+    for rid in added_rule_ids:
+        monitor_engine.add_rule(want[rid])
+    for rid in removed_rule_ids:
+        monitor_engine.remove_rule(rid)
+    # added/removed 保持策略 id 口径, 兼容既有调用方与测试; 规则 id 另给明细字段
+    added = sorted({want[rid]["strategy_id"] for rid in added_rule_ids})
+    removed = sorted({current[rid].get("strategy_id") for rid in removed_rule_ids if current[rid].get("strategy_id")})
+    if added_rule_ids or removed_rule_ids:
         logger.info(
-            "paper watch synced: +%s -%s (watching %d strategies)",
-            added, removed, len(want),
+            "paper watch synced: +%s -%s (watching %d strategies, %d rules)",
+            added_rule_ids, removed_rule_ids,
+            len({r["strategy_id"] for r in want.values()}), len(want),
         )
-    return {"added": added, "removed": removed, "watching": sorted(want)}
+    return {
+        "added": added,
+        "removed": removed,
+        "watching": sorted({r["strategy_id"] for r in want.values()}),
+        "added_rules": added_rule_ids,
+        "removed_rules": removed_rule_ids,
+    }

@@ -200,6 +200,8 @@ def _strategy_detail(
         "description": description or s.meta.get("description", ""),
         "tags": s.meta.get("tags", []),
         "source": s.source,
+        "origin": s.meta.get("origin"),
+        "suitable_for": s.meta.get("suitable_for"),
         "research_only": s.meta.get("research_only", False),
         "execution_backend": s.execution_backend,
         "asset_types": s.meta.get("asset_types", ["stock"]),

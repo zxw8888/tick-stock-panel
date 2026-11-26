@@ -18,7 +18,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import * as echarts from 'echarts'
 import { Banknote, ChevronDown, ChevronUp, CircleDollarSign, GitCompare, History, ListChecks, PieChart, Plus, RefreshCw, Settings, ShieldAlert, SlidersHorizontal, Snowflake, Trash2, TrendingUp, Wallet, X, Zap } from 'lucide-react'
 import { createPortal } from 'react-dom'
-import { api, type PaperCompareRow, type PaperFill, type PaperHolding, type PaperOrder, type PaperRound } from '@/lib/api'
+import { api, type PaperAutoScope, type PaperCompareRow, type PaperFill, type PaperHolding, type PaperOrder, type PaperRound } from '@/lib/api'
 import { QK } from '@/lib/queryKeys'
 import { selectableStrategies, strategyOptionLabel } from '@/lib/strategyLibrary'
 import { useQuoteStatus } from '@/lib/useSharedQueries'
@@ -29,6 +29,7 @@ import { PageHeader } from '@/components/PageHeader'
 import { Modal } from '@/components/Modal'
 import { StrategyExecutionPanel } from './StrategyExecutionPanel'
 import { executionApi, executionListKey } from './executionClient'
+import { AutoScopePicker, isPaperAutoScopeValid, normalizePaperAutoScope, paperAutoScopeLabel } from './AutoScopePicker'
 
 const ORDER_TYPE_LABEL: Record<string, string> = {
   market: '即时',
@@ -163,6 +164,7 @@ const NEW_ACCOUNT_DEFAULTS_KEY = 'paper.newAccountDefaults'
 const PAPER_BASE_DEFAULTS_KEY = 'paper.baseDefaults.v1'
 type NewAccountDefaults = {
   cash?: string; commissionWan?: string; stampQian?: string; slippageBps?: string
+  auto_scope?: PaperAutoScope
 }
 
 function loadNewAccountDefaults(): Required<NewAccountDefaults> {
@@ -176,6 +178,7 @@ function loadNewAccountDefaults(): Required<NewAccountDefaults> {
     commissionWan: src.commissionWan ?? '2.5',   // 万2.5
     stampQian: src.stampQian ?? '1',             // 千1 (仅卖出)
     slippageBps: src.slippageBps ?? '5',         // 5bps
+    auto_scope: normalizePaperAutoScope(src.auto_scope),
   }
 }
 
@@ -188,6 +191,7 @@ function SetupCard({ accId, onDone, onCancel }: { accId: string; onDone: (create
   const [commissionWan, setCommissionWan] = useState(defaults.commissionWan)
   const [stampQian, setStampQian] = useState(defaults.stampQian)
   const [slippageBps, setSlippageBps] = useState(defaults.slippageBps)
+  const [autoScope, setAutoScope] = useState<PaperAutoScope>(defaults.auto_scope)
   const [name, setName] = useState('')
   // 事件跟单（兼容，可选）: 创建后立即绑一条自动跟单规则, 策略/监控规则触发信号时按下方参数自动下单
   const [autoKind, setAutoKind] = useState<'strategy' | 'rule'>('strategy')
@@ -223,6 +227,7 @@ function SetupCard({ accId, onDone, onCancel }: { accId: string; onDone: (create
         commission_pct: Number(commissionWan) / 10000,   // 万 X → pct
         stamp_tax_pct: Number(stampQian) / 1000,         // 千 X → pct
         slippage_bps: Number(slippageBps),
+        auto_scope: normalizePaperAutoScope(autoScope),
       })
       if (autoId.trim()) {
         try {
@@ -249,6 +254,7 @@ function SetupCard({ accId, onDone, onCancel }: { accId: string; onDone: (create
       try {
         localStorage.setItem(NEW_ACCOUNT_DEFAULTS_KEY, JSON.stringify({
           cash, commissionWan, stampQian, slippageBps,
+          auto_scope: normalizePaperAutoScope(autoScope),
         }))
       } catch { /* 存储不可用时静默 */ }
       if (ruleError) { setRuleWarn(ruleError); return }
@@ -276,6 +282,7 @@ function SetupCard({ accId, onDone, onCancel }: { accId: string; onDone: (create
 
   const valid = Number(cash) > 0
     && Number(commissionWan) >= 0 && Number(stampQian) >= 0 && Number(slippageBps) >= 0
+    && isPaperAutoScopeValid(autoScope)
     && (!autoId.trim() || Number(sizeValue) > 0)
   const segBtn = (active: boolean) => cn(
     'whitespace-nowrap rounded-btn border px-2 py-1 text-[11px] transition-colors',
@@ -322,6 +329,15 @@ function SetupCard({ accId, onDone, onCancel }: { accId: string; onDone: (create
           <input type="number" step="1" min="0" value={slippageBps} onChange={e => setSlippageBps(e.target.value)}
             className="mt-1 w-full rounded-btn border border-border bg-base px-2 py-2 font-mono text-sm outline-none focus:border-accent/50" />
         </div>
+      </div>
+
+      <div className="mt-4 rounded-card border border-border bg-base/40 p-3">
+        <div className="mb-2 flex items-center gap-1.5">
+          <ListChecks className="h-3.5 w-3.5 text-accent" />
+          <span className="text-xs font-medium text-secondary">自动跟单股票范围</span>
+          <span className="text-[10px] text-muted">创建后仍可在账户设置里修改</span>
+        </div>
+        <AutoScopePicker value={autoScope} onChange={setAutoScope} compact />
       </div>
 
       {/* 事件跟单（兼容，可选）: 创建即绑定, 信号触发自动下单 */}
@@ -852,10 +868,12 @@ function CandidateCompareCard({ paper }: { paper: PaperCompareStats }) {
 // 费用与撮合设置 (当前账户弹窗): 佣金/印花税/滑点 + 涨跌停排队。
 // 只影响之后的新成交, 不重算历史台账 (口径与回测费用模型一致)。
 // ================================================================
-function FeeSettingsModal({ accId, fees, queue, onSaved, onClose }: {
+function FeeSettingsModal({ accId, fees, queue, autoScope: autoScopeProp, scopeWarning, onSaved, onClose }: {
   accId: string
   fees: { commission_pct: number; stamp_tax_pct: number; slippage_bps: number }
   queue: boolean
+  autoScope?: PaperAutoScope
+  scopeWarning?: string | null
   onSaved: () => void
   onClose: () => void
 }) {
@@ -863,6 +881,7 @@ function FeeSettingsModal({ accId, fees, queue, onSaved, onClose }: {
   const [stampQian, setStampQian] = useState((fees.stamp_tax_pct * 1000).toFixed(2))
   const [slippageBps, setSlippageBps] = useState(String(fees.slippage_bps))
   const [queueOn, setQueueOn] = useState(queue)
+  const [autoScope, setAutoScope] = useState<PaperAutoScope>(normalizePaperAutoScope(autoScopeProp))
   const [err, setErr] = useState<string | null>(null)
   const qc = useQueryClient()
   const m = useMutation({
@@ -871,6 +890,7 @@ function FeeSettingsModal({ accId, fees, queue, onSaved, onClose }: {
       stamp_tax_pct: Number(stampQian) / 1000,         // 千 X → pct
       slippage_bps: Number(slippageBps),
       queue_limit_orders: queueOn,
+      auto_scope: normalizePaperAutoScope(autoScope),
     }, accId),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: QK.paperAll })
@@ -882,6 +902,7 @@ function FeeSettingsModal({ accId, fees, queue, onSaved, onClose }: {
   const valid = Number(commissionWan) >= 0 && Number(commissionWan) <= 100
     && Number(stampQian) >= 0 && Number(stampQian) <= 50
     && Number(slippageBps) >= 0 && Number(slippageBps) <= 200
+    && isPaperAutoScopeValid(autoScope)
   const inputCls = 'mt-1 w-full rounded-btn border border-border bg-base px-2 py-1.5 font-mono text-sm outline-none focus:border-accent/50'
   return (
     <Modal onClose={onClose} labelledBy="fee-settings-title">
@@ -917,6 +938,11 @@ function FeeSettingsModal({ accId, fees, queue, onSaved, onClose }: {
           </span>
           <input type="checkbox" checked={queueOn} onChange={e => setQueueOn(e.target.checked)} className="h-4 w-4 shrink-0" />
         </label>
+        <div className="mt-4 rounded-card border border-border bg-base/40 p-3">
+          <div className="mb-2 text-xs font-medium text-secondary">自动跟单股票范围</div>
+          <AutoScopePicker value={autoScope} onChange={setAutoScope} />
+          {scopeWarning && <div className="mt-2 rounded-btn bg-warning/10 px-2 py-1.5 text-[11px] text-warning">{scopeWarning}</div>}
+        </div>
         <div className="mt-4 flex gap-2">
           <button
             onClick={() => m.mutate()}
@@ -944,15 +970,17 @@ function BaseDefaultsModal({ onClose }: { onClose: () => void }) {
   const [commissionWan, setCommissionWan] = useState(defaults.commissionWan)
   const [stampQian, setStampQian] = useState(defaults.stampQian)
   const [slippageBps, setSlippageBps] = useState(defaults.slippageBps)
+  const [autoScope, setAutoScope] = useState<PaperAutoScope>(defaults.auto_scope)
   const [saved, setSaved] = useState(false)
   const hasBase = (() => { try { return !!localStorage.getItem(PAPER_BASE_DEFAULTS_KEY) } catch { return false } })()
   const valid = Number(cash) > 0
     && Number(commissionWan) >= 0 && Number(commissionWan) <= 100
     && Number(stampQian) >= 0 && Number(stampQian) <= 50
     && Number(slippageBps) >= 0 && Number(slippageBps) <= 200
+    && isPaperAutoScopeValid(autoScope)
   const save = () => {
     try {
-      localStorage.setItem(PAPER_BASE_DEFAULTS_KEY, JSON.stringify({ cash, commissionWan, stampQian, slippageBps }))
+      localStorage.setItem(PAPER_BASE_DEFAULTS_KEY, JSON.stringify({ cash, commissionWan, stampQian, slippageBps, auto_scope: normalizePaperAutoScope(autoScope) }))
       setSaved(true)
       setTimeout(onClose, 600)
     } catch { /* 存储不可用时静默 */ }
@@ -960,6 +988,7 @@ function BaseDefaultsModal({ onClose }: { onClose: () => void }) {
   const reset = () => {
     try { localStorage.removeItem(PAPER_BASE_DEFAULTS_KEY) } catch { /* 静默 */ }
     setCash('1000000'); setCommissionWan('2.5'); setStampQian('1'); setSlippageBps('5')
+    setAutoScope(normalizePaperAutoScope(null))
   }
   const inputCls = 'mt-1 w-full rounded-btn border border-border bg-base px-2 py-1.5 font-mono text-sm outline-none focus:border-accent/50'
   return (
@@ -971,7 +1000,7 @@ function BaseDefaultsModal({ onClose }: { onClose: () => void }) {
         </div>
         <p className="mt-2 text-[11px] leading-relaxed text-muted">
           新建账户 (单账户 / 批量) 自动加载以下默认值, 优先于「记住上次取值」;
-          已有账户不受影响, 各账户费率仍可单独调整。
+          已有账户不受影响, 各账户费率与跟单范围仍可单独调整。
         </p>
         <label className="mt-4 block text-[11px] text-muted">初始虚拟资金 (元)</label>
         <input type="number" min="1" value={cash} onChange={e => setCash(e.target.value)} className={inputCls} />
@@ -989,6 +1018,10 @@ function BaseDefaultsModal({ onClose }: { onClose: () => void }) {
             <input type="number" step="1" min="0" max="200" value={slippageBps} onChange={e => setSlippageBps(e.target.value)} className={inputCls} />
           </div>
         </div>
+        <div className="mt-4 rounded-card border border-border bg-base/40 p-3">
+          <div className="mb-2 text-xs font-medium text-secondary">自动跟单股票范围（新账户默认）</div>
+          <AutoScopePicker value={autoScope} onChange={setAutoScope} />
+        </div>
         <div className="mt-4 flex gap-2">
           <button
             onClick={save}
@@ -1001,7 +1034,7 @@ function BaseDefaultsModal({ onClose }: { onClose: () => void }) {
             <button
               onClick={reset}
               className="rounded-btn border border-border px-3 text-xs text-muted transition-colors hover:border-warning/40 hover:text-warning"
-              title="清除自定义基础配置, 回落内置默认 (100万 / 万2.5 / 千1 / 5bps)"
+              title="清除自定义基础配置, 回落内置默认 (100万 / 万2.5 / 千1 / 5bps / 全市场)"
             >
               恢复内置默认
             </button>
@@ -1853,6 +1886,7 @@ function BatchCreateModal({ onClose, onCreated }: { onClose: () => void; onCreat
         commission_pct: Number(commissionWan) / 10000,   // 万 X → pct
         stamp_tax_pct: Number(stampQian) / 1000,         // 千 X → pct
         slippage_bps: Number(slippageBps),
+        auto_scope: normalizePaperAutoScope(defaults.auto_scope),
         sources: rows.map(r => ({
           name: r.name.trim() || undefined,
           match_kind: r.kind,
@@ -1868,7 +1902,7 @@ function BatchCreateModal({ onClose, onCreated }: { onClose: () => void; onCreat
     onSuccess: r => {
       qc.invalidateQueries({ queryKey: QK.paperAll })
       try {
-        localStorage.setItem(NEW_ACCOUNT_DEFAULTS_KEY, JSON.stringify({ cash, commissionWan, stampQian, slippageBps }))
+        localStorage.setItem(NEW_ACCOUNT_DEFAULTS_KEY, JSON.stringify({ cash, commissionWan, stampQian, slippageBps, auto_scope: normalizePaperAutoScope(defaults.auto_scope) }))
       } catch { /* 存储不可用时静默 */ }
       onCreated(r.created.length)
     },
@@ -2229,6 +2263,17 @@ function AccountPanel({ acc, name, onDeleted }: { acc: string; name?: string; on
             涨跌停排队
           </span>
         )}
+        <span
+          className="rounded-full bg-border/40 px-2 py-0.5 text-[10px] text-secondary"
+          title={`自动跟单范围: ${JSON.stringify(normalizePaperAutoScope(ov.auto_scope))} — 点击调整`}
+        >
+          范围 {paperAutoScopeLabel(ov.auto_scope)}
+        </span>
+        {ov.auto_scope_warning && (
+          <span className="rounded-full bg-warning/15 px-2 py-0.5 text-[10px] text-warning" title={ov.auto_scope_warning}>
+            自动跟单已暂停
+          </span>
+        )}
         <button
           onClick={() => setFeeOpen(true)}
           className="ml-auto flex items-center gap-1 rounded-btn border border-border px-2 py-0.5 text-[11px] text-muted transition-colors hover:border-accent/40 hover:text-accent"
@@ -2526,6 +2571,8 @@ function AccountPanel({ acc, name, onDeleted }: { acc: string; name?: string; on
           accId={acc}
           fees={ov.fees}
           queue={!!ov.queue_limit_orders}
+          autoScope={ov.auto_scope}
+          scopeWarning={ov.auto_scope_warning}
           onSaved={() => setFeeOpen(false)}
           onClose={() => setFeeOpen(false)}
         />

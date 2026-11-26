@@ -17,7 +17,7 @@ from pathlib import Path
 ROOT = Path(r"D:\TSP\tick-stock-panel")
 PY = ROOT / "backend" / ".venv" / "Scripts" / "python.exe"
 DIST = ROOT / "dist" / "TSP"
-OUT_ZIP = Path(r"D:\TSP\TSP_LOF_20261121.zip")
+OUT_ZIP = Path(r"D:\TSP\TSP_LOF_20261125.zip")
 
 
 def clean_env() -> dict[str, str]:
@@ -59,6 +59,10 @@ def main() -> None:
         internal / "tdxaidata" / "lib" / "TdxAiData.dll",
         internal / "tdxaidata" / "lib" / "TdxAiData.ini",
         internal / "static" / "index.html",
+        internal / "app" / "strategy" / "seeds" / "bond_trend.py",
+        internal / "app" / "strategy" / "seeds" / "turtle_trading.py",
+        internal / "app" / "strategy" / "recommended_pack" / "manifest.json",
+        internal / "app" / "strategy" / "recommended_pack" / "rec_risk_adjusted_momentum.py",
     ]
     for p in checks:
         if not p.exists():
@@ -78,7 +82,12 @@ mods = set(z.toc)
 need = ['tdxaidata','tdxaidata.tdxaidata','app.plugins.tdxquant.provider',
         'app.plugins.tdxquant.client','app.plugins.tdxquant.probe',
         'app.plugins.freetdx.provider','app.plugins.freetdx.client',
-        'pytdx','pytdx.hq','app.asset_types','webview','asset_types']
+        'pytdx','pytdx.hq','app.asset_types','webview','asset_types',
+        'app.strategy.monitor_rules','app.strategy.monitor',
+        'app.strategy.strategy_seeds','app.services.quote_service',
+        'app.strategy.paper','app.strategy.paper_auto','app.strategy.paper_watch',
+        'app.api.paper','app.api.kline','app.indicators.chips','app.indicators.patterns']
+need += ['app.services.recommended_strategies','app.api.strategy_recommended']
 missing = [m for m in need if m not in mods and not (m=='asset_types' and 'app.asset_types' in mods)]
 print('PYZ missing:', missing)
 raise SystemExit(1 if missing else 0)

@@ -83,6 +83,16 @@ it('avoids overlapping volume labels and hides them in compact mode without remo
   expect(ctx.fillText).toHaveBeenCalledExactlyOnceWith('成交量', 8, 14)
 })
 
+it('keeps explicitly always-on labels visible in compact mode', () => {
+  const { annotation, ctx, draw } = setup({ dates, labels: [
+    { time: dates[1], value: 10, text: '十字', color: '#F0724A', always: true },
+    { time: dates[2], value: 9, text: '普通标签' },
+  ] })
+  annotation.setCompact(true)
+  draw()
+  expect(ctx.fillText.mock.calls.map(call => call[0])).toEqual(['十字'])
+})
+
 it('drops its chart references when detached and stops requesting draws', () => {
   const { annotation, ctx, draw, requestUpdate } = setup({ dates })
   requestUpdate.mockClear()

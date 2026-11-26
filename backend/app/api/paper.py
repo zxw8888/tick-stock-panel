@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import uuid
 from pathlib import Path
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
@@ -32,6 +33,26 @@ def _acc(request: Request, account: str) -> str:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
 
+def _validate_auto_scope(value: Any) -> dict | None:
+    """API 层校验账户范围: 域校验 + 自选分组存在性。None 表示不改动。"""
+    if value is None:
+        return None
+    try:
+        cfg = paper.validate_auto_scope(value)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    if cfg["scope"] == "watchlist_group":
+        from app.services import watchlist
+
+        try:
+            group_ids = {str(g["id"]) for g in watchlist.list_groups()}
+        except Exception as e:  # noqa: BLE001 — 自选数据异常不能静默建出死规则
+            raise HTTPException(status_code=400, detail=f"自选分组读取失败: {e}") from e
+        if cfg["group_id"] not in group_ids:
+            raise HTTPException(status_code=400, detail=f"自选分组不存在: {cfg['group_id']}")
+    return cfg
+
+
 class AccountModel(BaseModel):
     initial_cash: float
     account_id: str = paper.DEFAULT_ACCOUNT_ID
@@ -40,6 +61,7 @@ class AccountModel(BaseModel):
     stamp_tax_pct: float = paper.DEFAULT_STAMP_TAX_PCT
     slippage_bps: float = paper.DEFAULT_SLIPPAGE_BPS
     queue_limit_orders: bool = False
+    auto_scope: dict | None = None
 
 
 class OrderModel(BaseModel):
@@ -56,6 +78,7 @@ class SettingsModel(BaseModel):
     commission_pct: float | None = None   # 佣金率 (0.00025 = 万2.5)
     stamp_tax_pct: float | None = None    # 印花税 (0.001 = 千1, 仅卖出)
     slippage_bps: float | None = None     # 滑点 (5 = 5bps)
+    auto_scope: dict | None = None
 
 
 def _resolve_asset_type(request: Request, symbol: str) -> str:
@@ -104,6 +127,7 @@ def get_account(request: Request, account: str = Query(paper.DEFAULT_ACCOUNT_ID)
 
 @router.post("/account")
 def create_account(request: Request, body: AccountModel):
+    scope_cfg = _validate_auto_scope(body.auto_scope)
     try:
         acc = paper.create_account(
             _data_dir(request),
@@ -114,9 +138,13 @@ def create_account(request: Request, body: AccountModel):
             stamp_tax_pct=body.stamp_tax_pct,
             slippage_bps=body.slippage_bps,
             queue_limit_orders=body.queue_limit_orders,
+            auto_scope=scope_cfg,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+    from app.strategy import paper_watch
+
+    paper_watch.sync_from_state(request.app.state, _data_dir(request))
     return {"account": acc}
 
 
@@ -146,6 +174,8 @@ def overview(request: Request, account: str = Query(paper.DEFAULT_ACCOUNT_ID)):
         return {"initialized": False, "account_id": acc_id}
     ov = paper.overview(data_dir, account_id=acc_id)
     ov["fees"] = {k: acc[k] for k in ("commission_pct", "stamp_tax_pct", "slippage_bps")}
+    ov["auto_scope"] = paper.get_auto_scope(data_dir, acc_id)
+    ov["auto_scope_warning"] = paper.auto_scope_warning(data_dir, acc_id)
 
     # 盘中实时估算: 从行情服务的当日 enriched 快照取 raw_close (软失败, 降级日线)
     qs = getattr(request.app.state, "quote_service", None)
@@ -157,6 +187,8 @@ def overview(request: Request, account: str = Query(paper.DEFAULT_ACCOUNT_ID)):
                 snapshot = dict(zip(enriched["symbol"].to_list(), enriched["raw_close"].to_list(), strict=False))
                 live = paper.overview(data_dir, snapshot, account_id=acc_id)
                 live["fees"] = ov["fees"]
+                live["auto_scope"] = ov["auto_scope"]
+                live["auto_scope_warning"] = ov["auto_scope_warning"]
                 return live
         except Exception as e:
             logger.warning("paper overview 实时估算失败, 降级日线口径: %s", e)
@@ -288,6 +320,8 @@ def compare_accounts(request: Request):
             "status": acc.get("status"),
             "initial_cash": initial,
             "fees": {k: acc.get(k) for k in ("commission_pct", "stamp_tax_pct", "slippage_bps")},
+            "auto_scope": paper.get_auto_scope(data_dir, acc_id),
+            "auto_scope_warning": paper.auto_scope_warning(data_dir, acc_id),
             "total": ov.get("total"),
             "cash": ov.get("cash"),
             "market_value": ov.get("market_value"),
@@ -342,11 +376,16 @@ def freeze(request: Request, frozen: bool = True, account: str = Query(paper.DEF
 
 @router.post("/settings")
 def update_settings(request: Request, body: SettingsModel, account: str = Query(paper.DEFAULT_ACCOUNT_ID)):
-    """更新账户设置 (涨跌停排队等开关)。"""
+    """更新账户设置 (费用/涨跌停排队/自动跟单范围)。"""
+    payload = body.model_dump()
+    payload["auto_scope"] = _validate_auto_scope(body.auto_scope)
     try:
-        acc = paper.update_settings(_data_dir(request), _acc(request, account), **body.model_dump())
+        acc = paper.update_settings(_data_dir(request), _acc(request, account), **payload)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+    from app.strategy import paper_watch
+
+    paper_watch.sync_from_state(request.app.state, _data_dir(request))
     return {"account": acc}
 
 
@@ -421,6 +460,7 @@ class ArenaBatchModel(BaseModel):
     stamp_tax_pct: float = paper.DEFAULT_STAMP_TAX_PCT
     slippage_bps: float = paper.DEFAULT_SLIPPAGE_BPS
     queue_limit_orders: bool = False
+    auto_scope: dict | None = None
 
 
 @router.post("/arena/batch_create")
@@ -437,6 +477,7 @@ def arena_batch_create(request: Request, body: ArenaBatchModel):
         raise HTTPException(status_code=400, detail="至少需要一个来源")
     if len(body.sources) > 20:
         raise HTTPException(status_code=400, detail="单次最多创建 20 个对比账户")
+    scope_cfg = _validate_auto_scope(body.auto_scope)
 
     data_dir = _data_dir(request)
     try:
@@ -471,6 +512,7 @@ def arena_batch_create(request: Request, body: ArenaBatchModel):
                 stamp_tax_pct=body.stamp_tax_pct,
                 slippage_bps=body.slippage_bps,
                 queue_limit_orders=body.queue_limit_orders,
+                auto_scope=scope_cfg,
             )
             saved = paper_auto.create_auto_rule(data_dir, rule, account_id=account_id)
             created.append({"account": account_id, "name": acc_name, "rule_id": saved["id"]})

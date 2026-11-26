@@ -148,6 +148,58 @@ def get_options(request: Request):
         {"key": f, "label": ENRICHED_COLUMNS.get(f, f)}
         for f in sorted(ALLOWED_FIELDS)
     ]
+    # 阈值字段分组 (前端用 optgroup 渲染; 61 个形态平铺会把下拉撑爆)。
+    # 只保留白名单内字段, 未列入分组的字段仍会通过平铺的 threshold_fields 出现。
+    from app.indicators.pipeline import ENRICHED_COLUMNS_BY_CATEGORY
+
+    group_labels = {
+        "basic": "基础", "ma": "均线 MA", "ema": "指数均线 EMA",
+        "macd": "MACD", "boll": "布林带 BOLL", "kdj": "KDJ",
+        "atr": "ATR", "volume": "量价", "extremes": "极值",
+        "momentum": "动量", "volatility": "波动率", "rsi": "RSI",
+        "ext_ma": "扩展 · 均线", "ext_bias": "扩展 · 乖离",
+        "ext_momentum": "扩展 · 动量", "ext_trend": "扩展 · 趋势",
+        "ext_oscillator": "扩展 · 震荡", "ext_volume": "扩展 · 量能",
+        "ext_other": "扩展 · 其他",
+        "pattern": "K线形态",
+    }
+    quote_field_names = {
+        "open", "high", "low", "close", "volume", "amount",
+        "turnover_rate", "consecutive_limit_ups", "consecutive_limit_downs",
+    }
+    threshold_groups: list[dict] = []
+    grouped: set[str] = set()
+    quote_fields = sorted(ALLOWED_FIELDS & quote_field_names)
+    if quote_fields:
+        threshold_groups.append({
+            "key": "quote",
+            "label": "行情",
+            "fields": [
+                {"key": f, "label": ENRICHED_COLUMNS.get(f, f)} for f in quote_fields
+            ],
+        })
+        grouped.update(quote_fields)
+    for cat, label in group_labels.items():
+        cat_fields = [
+            f for f in ENRICHED_COLUMNS_BY_CATEGORY.get(cat, []) if f in ALLOWED_FIELDS
+        ]
+        if not cat_fields:
+            continue
+        threshold_groups.append({
+            "key": cat,
+            "label": label,
+            "fields": [
+                {"key": f, "label": ENRICHED_COLUMNS.get(f, f)} for f in cat_fields
+            ],
+        })
+        grouped.update(cat_fields)
+    rest = sorted(ALLOWED_FIELDS - grouped)
+    if rest:
+        threshold_groups.append({
+            "key": "other",
+            "label": "其他",
+            "fields": [{"key": f, "label": ENRICHED_COLUMNS.get(f, f)} for f in rest],
+        })
     # 盘中信号列 (布尔, 用于 op=truth); 日线信号列已全部定义驱动 → custom_signals
     builtin_signals = [
         {"key": key, "label": label}
@@ -175,6 +227,7 @@ def get_options(request: Request):
     }
     return {
         "threshold_fields": threshold_fields,
+        "threshold_groups": threshold_groups,
         "builtin_signals": builtin_signals,
         "custom_signals": custom_sigs,
         "operators": [">", ">=", "<", "<=", "==", "!="],

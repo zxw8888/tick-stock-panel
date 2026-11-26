@@ -221,6 +221,15 @@ def on_rule_events(data_dir: Path, events: list[dict], account_id: str = paper.D
     rules = load_auto_rules(data_dir, account_id, enabled_only=True)
     if not rules:
         return created
+    # 账户级跟单范围: 合成规则事件按 scope_key 分流, 所有事件按 symbol 白名单二次过滤。
+    # 逐账户调用, 范围互不串扰; 空组/删组解析为空集, fail-closed 不下单。
+    from app.strategy import paper_watch
+    from app.strategy.monitor import resolve_scope_symbols
+
+    cfg = paper.get_auto_scope(data_dir, account_id)
+    allowed = resolve_scope_symbols(cfg, f"paper:{account_id}", label="模拟盘账户")
+    account_scope_key = paper.scope_key(cfg)
+    restricted = account_scope_key != "all"
     with paper.PAPER_LOCK:
         # 同一批事件内复用快照, 由 create_order 后的持仓变化反映 (循环内重取)
         for ev in events:
@@ -228,6 +237,16 @@ def on_rule_events(data_dir: Path, events: list[dict], account_id: str = paper.D
             price = ev.get("price")
             if not symbol or price is None or price <= 0:
                 continue
+            if restricted:
+                # 批量事件没有单一 symbol, 无法安全判定范围, 直接跳过
+                if symbol == "_batch":
+                    continue
+                if allowed is not None and symbol not in allowed:
+                    continue
+                if paper_watch.is_paper_watch_event(ev):
+                    ev_scope = paper_watch.scope_key_from_rule_id(ev.get("rule_id"), ev.get("strategy_id"))
+                    if ev_scope is not None and ev_scope != account_scope_key:
+                        continue
             for rule in rules:
                 if not _matches(rule, ev):
                     continue

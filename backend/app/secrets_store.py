@@ -170,10 +170,36 @@ def get_env_backed_secret(field: str, env_name: str) -> str:
     return os.environ.get(env_name, "").strip()
 
 
+EASTMONEY_COOKIE_FIELD = "eastmoney_cookie"
+
+
+def get_eastmoney_cookie() -> str:
+    """东方财富登录态 Cookie (可选)。空串表示匿名访问。
+
+    Cookie 只在 LOF/ETF 的东财兜底通道上作为请求头注入, 用于降低匿名限流;
+    东财公开接口不依赖它也能取数, 因此缺省为空是合法状态。
+    """
+    return str(load().get(EASTMONEY_COOKIE_FIELD) or "").strip()
+
+
+def set_eastmoney_cookie(cookie: str) -> str:
+    """写入/清空东财 Cookie。换行会被剔除, 避免 HTTP 头注入。"""
+    value = (cookie or "").replace("\r", "").replace("\n", "").strip()
+    if value:
+        save({EASTMONEY_COOKIE_FIELD: value})
+    else:
+        clear(EASTMONEY_COOKIE_FIELD)
+    return value
+
+
 def mask(key: str, prefix: int = 4, suffix: int = 4) -> str:
     """脱敏显示。"""
     if not key:
         return ""
     if len(key) <= prefix + suffix:
         return "•" * len(key)
-    return f"{key[:prefix]}{'•' * 6}{key[-suffix:]}"
+    # prefix/suffix 允许为 0 (Cookie 这类长凭据要求全遮); 注意 key[-0:] 会返回
+    # 整个字符串, 必须显式判空, 否则脱敏串会把明文尾部带出去。
+    head = key[:prefix] if prefix > 0 else ""
+    tail = key[-suffix:] if suffix > 0 else ""
+    return f"{head}{'•' * 6}{tail}"

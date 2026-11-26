@@ -285,6 +285,7 @@ export function buildAnalysisChartModel(input: AnalysisChartInput): AnalysisChar
       time: row.date,
       value: marker.above ? row.high : row.low,
       text: marker.label ?? '',
+      always: true,
       ...(marker.color ? { color: marker.color } : {}),
     }]
   })

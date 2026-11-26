@@ -1,0 +1,205 @@
+{
+  "pack_version": "2026.11.1",
+  "strategies": [
+    {
+      "id": "rec_risk_adjusted_momentum",
+      "name": "风险调整动量",
+      "file": "rec_risk_adjusted_momentum.py",
+      "version": "1.0.0",
+      "category": "动量趋势",
+      "description": "60日动量除以20日年化波动，叠加MA120趋势过滤；追求上涨效率而不是单纯涨幅。",
+      "asset_types": ["stock", "etf"],
+      "timeframes": ["1d"],
+      "sources": ["Moskowitz, Ooi & Pedersen (2012), Time Series Momentum", "AQR momentum research"],
+      "suitable_for": {
+        "market_cap": ["mid", "large"],
+        "styles": ["trend", "leader"],
+        "volatility": ["normal"],
+        "liquidity": ["high"],
+        "boards": ["沪主板", "深主板", "创业板", "科创板"],
+        "avoid": ["ST", "次新", "低流动性", "高波动", "退市风险"],
+        "note": "适合有中期趋势、波动可控、成交活跃的中大盘龙头，也可用于宽基或行业ETF。"
+      }
+    },
+    {
+      "id": "rec_dual_momentum_rotation",
+      "name": "双动量轮动",
+      "file": "rec_dual_momentum_rotation.py",
+      "version": "1.0.0",
+      "category": "动量趋势",
+      "description": "MA200绝对动量过滤，再按20/60/120日相对动量排序；用于趋势资产轮动与强弱切换。",
+      "asset_types": ["stock", "etf"],
+      "timeframes": ["1d"],
+      "sources": ["Antonacci (2014), Dual Momentum Investing", "Faber (2007), A Quantitative Approach to Tactical Asset Allocation"],
+      "suitable_for": {
+        "market_cap": ["mid", "large"],
+        "styles": ["trend", "leader"],
+        "volatility": ["normal"],
+        "liquidity": ["high"],
+        "boards": ["沪主板", "深主板", "创业板", "科创板"],
+        "avoid": ["ST", "次新", "低流动性", "高波动", "杠杆ETF"],
+        "note": "适合趋势清晰的中大盘行业龙头和宽基/行业ETF，不适合长期震荡或流动性不足的标的。"
+      }
+    },
+    {
+      "id": "rec_52week_high_breakout",
+      "name": "52周新高突破",
+      "file": "rec_52week_high_breakout.py",
+      "version": "1.0.0",
+      "category": "突破",
+      "description": "收盘突破前240日最高价，并要求MA120趋势、量比和当日涨幅同时确认。",
+      "asset_types": ["stock", "etf"],
+      "timeframes": ["1d"],
+      "sources": ["George & Hwang (2004), The 52-Week High and Momentum Investing"],
+      "suitable_for": {
+        "market_cap": ["mid", "large"],
+        "styles": ["trend", "breakout", "leader"],
+        "volatility": ["normal"],
+        "liquidity": ["high"],
+        "boards": ["沪主板", "深主板", "创业板", "科创板"],
+        "avoid": ["ST", "次新", "低流动性", "高波动", "退市风险"],
+        "note": "适合创新高后仍有量能配合的中大盘强势股，以及处于阶段新高的宽基/行业ETF。"
+      }
+    },
+    {
+      "id": "rec_trend_template",
+      "name": "趋势模板",
+      "file": "rec_trend_template.py",
+      "version": "1.0.0",
+      "category": "趋势",
+      "description": "MA50>MA150>MA200、MA200向上、距240日高点不超过25%，复刻Minervini趋势模板。",
+      "asset_types": ["stock"],
+      "timeframes": ["1d"],
+      "sources": ["Minervini (2013), Trade Like a Stock Market Wizard"],
+      "suitable_for": {
+        "market_cap": ["mid", "large"],
+        "styles": ["trend", "leader"],
+        "volatility": ["low", "normal"],
+        "liquidity": ["high"],
+        "boards": ["沪主板", "深主板", "创业板", "科创板"],
+        "avoid": ["ST", "次新", "低流动性", "高波动", "退市风险"],
+        "note": "适合长期均线多头排列、回撤受控的中大盘成长龙头；不适合短线题材连板和长期下降趋势股。"
+      }
+    },
+    {
+      "id": "rec_bollinger_mean_reversion",
+      "name": "布林均值回归",
+      "file": "rec_bollinger_mean_reversion.py",
+      "version": "1.0.0",
+      "category": "均值回归",
+      "description": "长期趋势向上时，价格跌破布林下轨且RSI14超卖，等待回归MA20。",
+      "asset_types": ["stock", "etf"],
+      "timeframes": ["1d"],
+      "sources": ["Bollinger (2001), Bollinger on Bollinger Bands", "Connors & Alvarez (2008), Short Term Trading Strategies That Work"],
+      "suitable_for": {
+        "market_cap": ["large", "mid"],
+        "styles": ["reversal", "range"],
+        "volatility": ["low", "normal"],
+        "liquidity": ["high"],
+        "boards": ["沪主板", "深主板", "创业板", "科创板"],
+        "avoid": ["ST", "次新", "低流动性", "高波动", "退市风险"],
+        "note": "适合长期趋势仍向上、短期超跌的流动性好的股票或ETF；不适合基本面恶化或单边下跌标的。"
+      }
+    },
+    {
+      "id": "rec_rsi2_extreme_reversion",
+      "name": "RSI2极端反转",
+      "file": "rec_rsi2_extreme_reversion.py",
+      "version": "1.0.0",
+      "category": "均值回归",
+      "description": "RSI2低于10、MA200长期趋势向上且5日急跌，捕捉短期极端超卖后的反弹。",
+      "asset_types": ["stock", "etf"],
+      "timeframes": ["1d"],
+      "sources": ["Connors & Alvarez (2008), Short Term Trading Strategies That Work"],
+      "suitable_for": {
+        "market_cap": ["large", "mid"],
+        "styles": ["reversal", "range"],
+        "volatility": ["normal"],
+        "liquidity": ["high"],
+        "boards": ["沪主板", "深主板", "创业板", "科创板"],
+        "avoid": ["ST", "次新", "低流动性", "高波动", "退市风险"],
+        "note": "适合长期趋势向上、短期急跌但流动性充足的股票和ETF；不适合基本面暴雷或持续阴跌标的。"
+      }
+    },
+    {
+      "id": "rec_nr7_breakout",
+      "name": "NR7波动收缩突破",
+      "file": "rec_nr7_breakout.py",
+      "version": "1.0.0",
+      "category": "突破",
+      "description": "7日最窄振幅后突破20日高点并放量，利用波动收缩后的方向选择。",
+      "asset_types": ["stock"],
+      "timeframes": ["1d"],
+      "sources": ["Crabel (1990), Day Trading with Short Term Price Patterns and Opening Range Breakout"],
+      "suitable_for": {
+        "market_cap": ["small", "mid"],
+        "styles": ["breakout", "trend"],
+        "volatility": ["normal", "high"],
+        "liquidity": ["normal", "high"],
+        "boards": ["沪主板", "深主板", "创业板", "科创板", "北交所"],
+        "avoid": ["ST", "次新", "低流动性", "退市风险"],
+        "note": "适合完成横盘收缩、量能开始放大的中小盘股票；突破失败率高，必须配合止损。"
+      }
+    },
+    {
+      "id": "rec_breakout_retest_hold",
+      "name": "突破回踩确认",
+      "file": "rec_breakout_retest_hold.py",
+      "version": "1.0.0",
+      "category": "突破",
+      "description": "20日新高后在突破位附近缩量回踩并守住，过滤追高和假突破。",
+      "asset_types": ["stock"],
+      "timeframes": ["1d"],
+      "sources": ["Minervini (2013), Trade Like a Stock Market Wizard", "O'Neil (2009), How to Make Money in Stocks"],
+      "suitable_for": {
+        "market_cap": ["mid", "large"],
+        "styles": ["breakout", "trend", "leader"],
+        "volatility": ["normal"],
+        "liquidity": ["high"],
+        "boards": ["沪主板", "深主板", "创业板", "科创板"],
+        "avoid": ["ST", "次新", "低流动性", "高波动", "退市风险"],
+        "note": "适合突破后回踩确认的中大盘强势股；不适合突破后快速跌破平台或流动性不足的标的。"
+      }
+    },
+    {
+      "id": "rec_obv_accumulation",
+      "name": "OBV吸筹",
+      "file": "rec_obv_accumulation.py",
+      "version": "1.0.0",
+      "category": "量价",
+      "description": "OBV 20日趋势向上、价格站上MA60且成交额达标，识别量价同步的吸筹结构。",
+      "asset_types": ["stock"],
+      "timeframes": ["1d"],
+      "sources": ["Granville (1976), New Key to Stock Market Profits", "Murphy (1999), Technical Analysis of the Financial Markets"],
+      "suitable_for": {
+        "market_cap": ["mid", "large"],
+        "styles": ["trend", "leader"],
+        "volatility": ["normal"],
+        "liquidity": ["high"],
+        "boards": ["沪主板", "深主板", "创业板", "科创板"],
+        "avoid": ["ST", "次新", "低流动性", "高波动", "退市风险"],
+        "note": "适合成交活跃、量价配合的中大盘股票；不适合靠单日脉冲放量制造的量价假象。"
+      }
+    },
+    {
+      "id": "rec_etf_dual_trend",
+      "name": "ETF双趋势",
+      "file": "rec_etf_dual_trend.py",
+      "version": "1.0.0",
+      "category": "ETF配置",
+      "description": "ETF站上MA200且60/120日动量为正，按20/60/120日动量排序，做趋势型ETF轮动。",
+      "asset_types": ["etf"],
+      "timeframes": ["1d"],
+      "sources": ["Faber (2007), A Quantitative Approach to Tactical Asset Allocation", "Antonacci (2014), Dual Momentum Investing"],
+      "suitable_for": {
+        "market_cap": ["all"],
+        "styles": ["trend", "leader"],
+        "volatility": ["low", "normal"],
+        "liquidity": ["high"],
+        "boards": ["沪主板", "深主板"],
+        "avoid": ["杠杆ETF", "低流动性", "高溢价", "跨境溢价风险"],
+        "note": "适合宽基、行业和商品ETF的趋势轮动；不适合高溢价、低流动性或杠杆/反向ETF。"
+      }
+    }
+  ]
+}

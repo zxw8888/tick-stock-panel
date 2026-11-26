@@ -233,7 +233,7 @@ _SIGNAL_PREFIXES = ("signal_", "csg_")
 # 分组/成员的操作都会 bump 版本号, 下一轮评估立即拿到新成员 (无需等 TTL)。
 _group_cache_lock = threading.Lock()
 _group_cache: dict[str, Any] = {}
-# 已告警过的「分组已删除」(rule_id, group_id), 防止每轮评估刷日志
+# 已告警过的「分组已删除」(owner_key, group_id), 防止每轮评估刷日志
 _warned_missing_groups: set[tuple[str, str]] = set()
 
 
@@ -280,6 +280,38 @@ def _group_members_or_none(rule: dict) -> frozenset[str] | None:
     return members
 
 
+def resolve_scope_symbols(cfg: dict, owner_key: str, *, label: str = "规则") -> frozenset[str] | None:
+    """把归一化后的范围配置解析为允许 symbol 集合。
+
+    None 表示 all (不过滤); frozenset 表示允许集合, 空集合表示 fail-closed。
+    watchlist_group 复用版本号缓存, 分组增删/删除后下一轮立即生效。
+    """
+    scope = cfg.get("scope", "all")
+    if scope == "all":
+        return None
+    if scope == "symbols":
+        return frozenset(str(s) for s in cfg.get("symbols") or [])
+    if scope == "watchlist_group":
+        group_id = str(cfg.get("group_id") or "")
+        try:
+            groups = _watchlist_groups_snapshot()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("%s %s 自选分组数据读取失败, 本轮跳过: %s", label, owner_key, exc)
+            return frozenset()
+        members = groups.get(group_id)
+        if members is None:
+            key = (owner_key, group_id)
+            if key not in _warned_missing_groups:
+                _warned_missing_groups.add(key)
+                logger.warning(
+                    "%s %s 绑定的自选分组 %s 已删除, 本轮跳过 (fail-closed, 恢复分组后自动生效)",
+                    label, owner_key, group_id,
+                )
+            return frozenset()
+        return members
+    return frozenset()
+
+
 def _is_signal_field(field: str) -> bool:
     return any(field.startswith(p) for p in _SIGNAL_PREFIXES)
 
@@ -291,6 +323,14 @@ def _build_condition_mask(df: pl.DataFrame, conditions: list[dict], logic: str) 
     logic: "and" | "or"
     返回命中行 (含 symbol/name/close/change_pct + 各信号列)
     """
+    # 阈值条件可能引用蜡烛形态 / InStock 扩展指标 (按需计算列): 实时快照由
+    # compute_indicators 默认路径产出, 不含这些列。先按需补齐, 否则整条规则
+    # 会被判成「字段缺失」返回空结果, 形态告警永远不触发。
+    referenced = {c.get("field", "") for c in conditions}
+    if referenced - set(df.columns):
+        from app.indicators.pipeline import ensure_indicator_columns
+
+        df = ensure_indicator_columns(df, referenced, assume_sorted=True)
     cols = set(df.columns)
     parts: list[pl.Expr] = []
     for c in conditions:
@@ -440,6 +480,7 @@ class MonitorRuleEngine:
             rule.get("score_max"),
             rule.get("asset_type", "stock"),
             rule.get("scope", "symbols"),
+            rule.get("group_id"),
             tuple(sorted(str(symbol) for symbol in rule.get("symbols", []))),
             rule.get("sector"),
             rule.get("sector_kind"),

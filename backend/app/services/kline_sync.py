@@ -301,6 +301,24 @@ def iter_daily_frames(
         raise ValueError("不支持的日K资产类型")
     from app.data_providers import custom
 
+    # LOF 日K不走 TickFlow / 自定义 daily 源：TickFlow 明确不支持场内基金,
+    # 自定义源的日K契约也只覆盖股票。与盘后 LOF 同步保持一致, 统一走
+    # lof_data（雪球优先、东财 push2his 兜底）, 否则修补/历史补齐必然空手而归。
+    if asset_type == "lof":
+        from app.services import lof_data
+
+        logger.info("日K修补取数: LOF 专用源 symbols=%d start=%s end=%s",
+                    len(symbols), start_time.isoformat(), end_time.isoformat())
+        frame = lof_data.fetch_daily(
+            symbols,
+            start=start_time.date(),
+            end=end_time.date(),
+            on_chunk_done=on_chunk_done,
+        )
+        if not frame.is_empty():
+            yield frame
+        return
+
     provider_name = preferences.get_daily_data_provider()
     logger.info("日K修补取数: provider=%s asset=%s symbols=%d start=%s end=%s",
                 provider_name, asset_type, len(symbols), start_time.isoformat(), end_time.isoformat())

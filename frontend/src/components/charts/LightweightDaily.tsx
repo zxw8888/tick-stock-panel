@@ -110,9 +110,12 @@ export function LightweightDaily({ data, assetType, symbol = '', height = 480, a
   const chartMarkers = useMemo<SeriesMarker<Time>[]>(() => showMarkers ? markers
     .filter(m => rows.some(r => r.date === m.date) && !(isEvent(m) && markerStyle === 'candle'))
     .sort((a, b) => a.date.localeCompare(b.date)).map(m => {
+      // 形态标注统一用小圆点 + 文字: 方向已由颜色/文字表达, 不再叠箭头。
       const appearance: Pick<SeriesMarker<Time>, 'shape' | 'size'> = isEvent(m)
         ? { shape: 'circle', size: 0 }
-        : { shape: m.kind === 'neutral' ? 'circle' : m.kind === 'buy' ? 'arrowUp' : 'arrowDown' }
+        : m.pattern
+          ? { shape: 'circle', size: 1 }
+          : { shape: m.kind === 'neutral' ? 'circle' : m.kind === 'buy' ? 'arrowUp' : 'arrowDown' }
       return {
         time: m.date, position: m.above || (m.kind === 'sell' && m.event !== 'limit_down' && m.event !== 'limit_down_recovery') ? 'aboveBar' : 'belowBar',
         color: isEvent(m) && (!m.color || m.color === EVENT_COLORS[m.event].body.dark)

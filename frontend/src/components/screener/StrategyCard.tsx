@@ -76,6 +76,8 @@ interface StrategyCardProps {
   name: string
   description?: string
   source?: string
+  /** recommended = 推荐策略包 */
+  origin?: string
   active: boolean
   count?: number
   /** 今日曾命中总数 */
@@ -100,7 +102,7 @@ interface StrategyCardProps {
 }
 
 export function StrategyCard({
-  name, description, source, active, count, expiredCount,
+  name, description, source, origin, active, count, expiredCount,
   loading, cardSize,
   onRun, disabled, onSettings, monitored, onToggleMonitor, timeframeBadge, computing, awaitRun,
 }: StrategyCardProps) {
@@ -130,6 +132,9 @@ export function StrategyCard({
             className="flex flex-col items-start cursor-pointer disabled:opacity-50 disabled:cursor-wait w-full">
             <div className="flex items-center gap-1.5 max-w-full">
               <span className={`text-[9px] px-1 py-px rounded border font-medium leading-tight shrink-0 ${badgeCls}`}>{srcLabel}</span>
+              {origin === 'recommended' && (
+                <span className="text-[9px] px-1 py-px rounded border font-medium leading-tight shrink-0 border-amber-500/30 bg-amber-500/10 text-amber-400">推荐</span>
+              )}
               {timeframeBadge && (
                 <span className="text-[9px] px-1 py-px rounded border font-medium leading-tight shrink-0 border-sky-500/30 bg-sky-500/10 text-sky-400">{timeframeBadge}</span>
               )}
@@ -167,6 +172,9 @@ export function StrategyCard({
             className="flex flex-col items-start cursor-pointer disabled:opacity-50 disabled:cursor-wait min-w-0">
             <div className="flex items-center gap-1.5 min-w-0">
               <span className={`text-[9px] px-1 py-px rounded border font-medium leading-tight shrink-0 ${badgeCls}`}>{srcLabel}</span>
+              {origin === 'recommended' && (
+                <span className="text-[9px] px-1 py-px rounded border font-medium leading-tight shrink-0 border-amber-500/30 bg-amber-500/10 text-amber-400">推荐</span>
+              )}
               {timeframeBadge && (
                 <span className="text-[9px] px-1 py-px rounded border font-medium leading-tight shrink-0 border-sky-500/30 bg-sky-500/10 text-sky-400">{timeframeBadge}</span>
               )}
@@ -198,6 +206,7 @@ export function StrategyCard({
           <button onClick={onRun} disabled={disabled}
             className="flex items-center gap-1 cursor-pointer disabled:opacity-50 disabled:cursor-wait">
             <span className="text-[8px] px-0.5 rounded bg-secondary/10 text-muted border border-border font-medium leading-tight">{srcLabel}</span>
+            {origin === 'recommended' && <span className="text-[8px] px-0.5 rounded border border-amber-500/30 bg-amber-500/10 font-medium leading-tight text-amber-400">荐</span>}
             <span className="text-[10px] font-medium whitespace-nowrap text-foreground">{name}</span>
             {count != null && !loading && (
               <span className={`text-xs font-mono font-bold tabular-nums ${countCls}`}>{count}</span>

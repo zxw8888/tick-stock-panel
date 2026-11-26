@@ -32,6 +32,8 @@ export interface ChartMarker {
   color?: string
   /** 明确的异动来源，避免把策略买卖点按颜色猜成涨停或炸板。 */
   event?: 'limit_up' | 'broken_limit_up' | 'limit_down' | 'limit_down_recovery'
+  /** K 线形态标注: 与异动标签同处蜡烛上方, 渲染时额外抬高避免重叠。 */
+  pattern?: boolean
 }
 
 export type DailyMarkerStyle = 'label' | 'candle'

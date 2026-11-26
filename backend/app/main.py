@@ -47,6 +47,7 @@ from app.api import (
     stock_analysis,
     strategy,
     strategy_pool,
+    strategy_recommended,
     task_registry,
     watchlist,
 )
@@ -358,6 +359,17 @@ async def _application_lifespan(app: FastAPI):
         _seeded_strategies = seed_missing_builtins(store.data_dir)
     except Exception as e:  # noqa: BLE001
         logger.warning("strategy seeding failed (ignored): %s", e)
+    try:
+        from app.services.recommended_strategies import auto_install_recommended
+
+        _recommended_install = auto_install_recommended(store.data_dir)
+        if _recommended_install.get("installed_ids"):
+            logger.info(
+                "recommended strategies installed: %d",
+                len(_recommended_install["installed_ids"]),
+            )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("recommended strategy install failed (ignored): %s", e)
     strategy_dirs = [
         Path(__file__).resolve().parent / "strategy" / "research",
         store.data_dir / "strategies" / "custom",
@@ -720,6 +732,7 @@ app.include_router(settings_api.router)
 app.include_router(upgrade_guard_api.router)
 app.include_router(strategy.router)
 app.include_router(strategy_pool.router)
+app.include_router(strategy_recommended.router)
 app.include_router(signals.router)
 app.include_router(monitor_rules.router)
 app.include_router(config_backup.router)

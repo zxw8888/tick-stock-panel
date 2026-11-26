@@ -21,7 +21,7 @@ export interface AnnotationData {
   gridColor?: string
   precision?: number
   verticals?: { time: Time; label?: string; color?: string }[]
-  labels?: { time: Time; value: number; text: string; color?: string }[]
+  labels?: { time: Time; value: number; text: string; color?: string; always?: boolean }[]
   textColor?: string
   title?: string
   readouts?: { text: string; color?: string }[]
@@ -179,7 +179,8 @@ export class ChartAnnotations implements ISeriesPrimitive<Time> {
         }
       }
       let labelRight = -Infinity
-      if (!this.compact) for (const label of this.data.labels ?? []) {
+      for (const label of this.data.labels ?? []) {
+        if (this.compact && !label.always) continue
         const x = ts.timeToCoordinate(label.time), y = series.priceToCoordinate(label.value)
         if (x == null || y == null || x < 0 || x > width) continue
         const textWidth = ctx.measureText(label.text).width

@@ -1,11 +1,15 @@
-import { lazy, Suspense, useCallback, useMemo, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { type KlineRow } from '@/lib/api'
+import { api, type KlineRow } from '@/lib/api'
 import { klineDailyQueryOptions, klineDateRange } from '@/lib/kline'
+import { buildPatternMarkers } from '@/lib/kline-patterns'
+import { QK } from '@/lib/queryKeys'
 import { storage } from '@/lib/storage'
 import type { ChartMarker, ChartPriceLine, ChartRange, ChartRenderer, DailyMarkerStyle, OHLC, VolumeCompareConfig } from '@/lib/chart-types'
 import { OVERLAY_INDICATORS, SUB_CHART_META } from '@/lib/chart-indicators'
 import { CHART_LAYOUT, dailyChartHeight } from '@/lib/chart-layout'
+import { PatternPicker } from './chart/PatternPicker'
+import { ChipsPanel } from './chart/ChipsPanel'
 
 const EChartsCandlestick = lazy(() => import('./EChartsCandlestick').then(m => ({ default: m.EChartsCandlestick })))
 const LightweightDaily = lazy(() => import('./charts/LightweightDaily').then(m => ({ default: m.LightweightDaily })))
@@ -162,6 +166,20 @@ export function StockDailyKChart({
   })
   // 加入自选日标注（与「异动」标记相互独立）
   const [showAddedMark, setShowAddedMark] = useState(true)
+  // 筹码分布面板: 独立开关 (持久化, 默认关闭), 打开时才请求后端
+  const [showChips, setShowChips] = useState<boolean>(() => storage.stockDailyChipsPanel.get(false))
+  // 筹码面板当前查看的交易日 (点 K 线切换); null = 跟随最后一根
+  const [chipsDate, setChipsDate] = useState<string | null>(null)
+  // 换标的时清掉上只股票的筹码日期
+  useEffect(() => { setChipsDate(null) }, [symbol])
+  // 蜡烛形态标注: 开关 + 选中形态 (持久化, 默认关闭, 打开时才请求后端)
+  const [patternState, setPatternState] = useState<{ enabled: boolean; selected: string[] }>(() => {
+    const saved = storage.stockDailyPatternMarkers.get({ enabled: false, selected: [] })
+    return {
+      enabled: saved?.enabled === true,
+      selected: Array.isArray(saved?.selected) ? saved.selected.filter((k): k is string => typeof k === 'string') : [],
+    }
+  })
   const [volumeCompare, setVolumeCompare] = useState<VolumeCompareConfig>(() =>
     normalizeVolumeCompare(storage.stockVolumeCompare.get(DEFAULT_VOLUME_COMPARE)),
   )
@@ -170,13 +188,41 @@ export function StockDailyKChart({
   // 查询配置统一来自 klineDailyQueryOptions, 与 StockPanel 信息条/邻近预取共享同一 cache key (只发一次请求)
   const kline = useQuery({ ...klineDailyQueryOptions(symbol, dateRange, extColumns), enabled: !!symbol })
 
+  // 形态元数据 (61 个中文名): 只在形态功能被启用后拉取一次, 常驻缓存
+  const patternMeta = useQuery({
+    queryKey: QK.klinePatternsMeta,
+    queryFn: api.klinePatternMeta,
+    enabled: patternState.enabled,
+    staleTime: Infinity,
+  })
+  const selectedPatterns = patternState.selected
+  const patternsQuery = useQuery({
+    queryKey: QK.klinePatterns(symbol, dateRange.start, dateRange.end, selectedPatterns),
+    queryFn: () => api.klinePatterns(symbol, dateRange, selectedPatterns),
+    enabled: !!symbol && patternState.enabled && selectedPatterns.length > 0,
+    staleTime: 5 * 60_000,
+  })
+
   const rows = useMemo(() => toOHLC(kline.data?.rows ?? []), [kline.data?.rows])
   const stockInfo = kline.data?.stock_info
   const limitMarkers = useMemo(() => buildLimitMarkers(kline.data?.rows ?? [], renderer === 'lightweight'), [kline.data?.rows, renderer])
+  const patternMarkers = useMemo(
+    () => patternState.enabled
+      ? buildPatternMarkers(patternsQuery.data?.rows ?? [], {
+          selected: selectedPatterns,
+          // 命中响应自带本区间的形态列表; 为空时回退到全量元数据 (两者同源, 仅防缺失)
+          meta: patternsQuery.data?.patterns?.length
+            ? patternsQuery.data.patterns
+            : patternMeta.data?.patterns ?? [],
+        })
+      : [],
+    [patternState.enabled, patternsQuery.data, patternMeta.data, selectedPatterns],
+  )
   const allMarkers = useMemo(() => [
     ...(markers ?? []),
     ...(showLimitMarkers ? limitMarkers : []),
-  ], [limitMarkers, markers, showLimitMarkers])
+    ...patternMarkers,
+  ], [limitMarkers, markers, patternMarkers, showLimitMarkers])
 
   const toggleIndicator = useCallback((key: string) => {
     setActiveIndicators(prev => prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key])
@@ -194,6 +240,28 @@ export function StockDailyKChart({
     setMarkerStyle(style)
     storage.stockDailyMarkerStyle.set(style)
   }
+
+  const updatePatternState = useCallback((patch: Partial<{ enabled: boolean; selected: string[] }>) => {
+    setPatternState(prev => {
+      const next = { enabled: patch.enabled ?? prev.enabled, selected: patch.selected ?? prev.selected }
+      storage.stockDailyPatternMarkers.set(next)
+      return next
+    })
+  }, [])
+
+  const toggleChips = useCallback(() => {
+    setShowChips(prev => {
+      storage.stockDailyChipsPanel.set(!prev)
+      if (prev) setChipsDate(null)
+      return !prev
+    })
+  }, [])
+
+  // 筹码面板打开时, 点 K 线把该日筹码切出来; 原有 onDateClick 行为保持不变
+  const handleChartDateClick = useCallback((date: string) => {
+    if (showChips) setChipsDate(String(date).slice(0, 10))
+    onDateClick?.(date)
+  }, [showChips, onDateClick])
 
   const activeSubDefs = activeIndicators
     .map(key => SUB_CHART_META.find(s => s.key === key))
@@ -262,6 +330,26 @@ export function StockDailyKChart({
           )}
           {/* 两个标注开关统一右对齐 */}
           <div className="ml-auto flex items-center gap-1.5">
+            {showMarkerToggle && (
+              <div className="flex items-center gap-1">
+                <ChartPill
+                  active={patternState.enabled}
+                  label="形态"
+                  activeClass="text-[#F0724A] bg-[#F0724A]/10"
+                  title={patternState.enabled ? '隐藏K线上的蜡烛形态标注' : '显示K线上的蜡烛形态标注'}
+                  onClick={() => updatePatternState({ enabled: !patternState.enabled })}
+                />
+                {patternState.enabled && (
+                  <PatternPicker
+                    meta={patternMeta.data?.patterns ?? []}
+                    selected={patternState.selected}
+                    onChange={selected => updatePatternState({ selected })}
+                    disabled={patternMeta.isLoading}
+                    defaultOpen={patternState.selected.length === 0}
+                  />
+                )}
+              </div>
+            )}
             {showMarkerToggle && showLimitMarkers && (
               <div className="flex items-center gap-1">
                 <ChartPill
@@ -283,6 +371,15 @@ export function StockDailyKChart({
                 </select>}
               </div>
             )}
+            {showMarkerToggle && (
+              <ChartPill
+                active={showChips}
+                label="筹码"
+                activeClass="text-[#FACC15] bg-[#FACC15]/10"
+                title={showChips ? '隐藏筹码分布面板' : '显示筹码分布面板 (CYQ)'}
+                onClick={toggleChips}
+              />
+            )}
             {/* 激活色与图表里的 ADDED_DATE_COLOR 一致; Tailwind 只认字面量类名, 故写死色值 */}
             {showMarkerToggle && addedDate && (
               <ChartPill
@@ -302,29 +399,44 @@ export function StockDailyKChart({
         <div className="text-sm text-danger py-2">数据格式异常，请刷新页面</div>
       )}
       {rows.length > 0 && (
-        <Suspense fallback={<div className="flex items-center justify-center text-xs text-muted" style={{ height }}>正在加载图表…</div>}>
-        <Chart
-          data={rows}
-          markers={allMarkers}
-          ranges={ranges}
-          priceLines={priceLines}
-          height={chartHeight - (renderer === 'lightweight' ? CHART_LAYOUT.toolbar : 22)}
-          showMA={showMA}
-          showInfoBar={showInfoBar}
-          showMarkers={showMarkers}
-          markerStyle={renderer === 'lightweight' ? markerStyle : undefined}
-          stockInfo={stockInfo}
-          assetType={kline.data?.asset_type}
-          symbol={symbol}
-          linkedPrice={linkedPrice}
-          onDateClick={onDateClick}
-          onPriceDoubleClick={onPriceDoubleClick}
-          visibleBars={visibleBars ?? (renderer === 'lightweight' ? undefined : 60)}
-          activeIndicators={activeIndicators}
-          volumeCompare={volumeCompare}
-          addedDate={showAddedMark ? addedDate : null}
-        />
-        </Suspense>
+        <div className={showChips ? 'flex items-start gap-2' : undefined}>
+          <div className="min-w-0 flex-1">
+            <Suspense fallback={<div className="flex items-center justify-center text-xs text-muted" style={{ height }}>正在加载图表…</div>}>
+            <Chart
+              data={rows}
+              markers={allMarkers}
+              ranges={ranges}
+              priceLines={priceLines}
+              height={chartHeight - (renderer === 'lightweight' ? CHART_LAYOUT.toolbar : 22)}
+              showMA={showMA}
+              showInfoBar={showInfoBar}
+              showMarkers={showMarkers}
+              markerStyle={renderer === 'lightweight' ? markerStyle : undefined}
+              stockInfo={stockInfo}
+              assetType={kline.data?.asset_type}
+              symbol={symbol}
+              linkedPrice={linkedPrice}
+              onDateClick={handleChartDateClick}
+              onPriceDoubleClick={onPriceDoubleClick}
+              visibleBars={visibleBars ?? (renderer === 'lightweight' ? undefined : 60)}
+              activeIndicators={activeIndicators}
+              volumeCompare={volumeCompare}
+              addedDate={showAddedMark ? addedDate : null}
+            />
+            </Suspense>
+          </div>
+          {showChips && (
+            <aside className="w-[190px] shrink-0 border-l border-border/50 pl-2">
+              <div className="mb-1 text-[11px] font-medium text-foreground">筹码分布</div>
+              <ChipsPanel
+                symbol={symbol}
+                date={chipsDate}
+                height={Math.max(160, chartHeight - (renderer === 'lightweight' ? CHART_LAYOUT.toolbar : 22) - 46)}
+                footer={chipsDate ? `点击K线切换日期` : '当前为最后一根K线'}
+              />
+            </aside>
+          )}
+        </div>
       )}
     </div>
   )

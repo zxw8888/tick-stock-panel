@@ -277,8 +277,11 @@ def validate(rule: dict) -> None:
         gid = rule.get("group_id")
         if not isinstance(gid, str) or not gid.strip():
             raise ValueError("scope=watchlist_group 时必须选择自选分组")
-        if rule.get("asset_type", "stock") != "stock":
-            raise ValueError("自选分组作用域仅支持个股")
+        # ETF 也有独立评估轮(quote_service 的 ETF 轮), 分组 scope 按 symbol
+        # 过滤对 ETF 同样有效, 故一并放行; LOF/index 无对应评估轮, 建了也永不
+        # 触发, 明确拒绝以避免死规则。
+        if rule.get("asset_type", "stock") not in ("stock", "etf"):
+            raise ValueError("自选分组作用域仅支持个股与 ETF")
     if uses_intraday_signals(rule) and rule.get("scope") != "symbols":
         raise ValueError("分时穿越信号仅支持指定标的")
     # sector 作用域的板块 JOIN 尚未实现: _apply_scope 目前会退化为「全市场」,

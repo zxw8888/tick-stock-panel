@@ -57,6 +57,14 @@ def _reject_over_limit(symbols: list, kind: str) -> None:
     )
 
 
+def _parse_date_param(value: str, field: str) -> date:
+    """把查询参数里的 YYYY-MM-DD 转成 date, 非法格式统一回 400。"""
+    try:
+        return date.fromisoformat(value)
+    except ValueError as exc:
+        raise HTTPException(400, f"{field} 格式错误 (应为 YYYY-MM-DD)") from exc
+
+
 def _json_safe(obj):
     """把 nan/inf 换成 None, 保证 JSON 合法。
 
@@ -492,9 +500,9 @@ def get_daily(
     repo = request.app.state.repo
     # 未传 end_date 时用北京今天: 实时注入只在内存缓存命中时补当日 K,
     # 缓存冷时 parquet 当日行能否进结果取决于这个窗口右端。
-    end = date.fromisoformat(end_date) if end_date else cn_today()
+    end = _parse_date_param(end_date, "end_date") if end_date else cn_today()
     if start_date:
-        start = date.fromisoformat(start_date)
+        start = _parse_date_param(start_date, "start_date")
     else:
         start = end - timedelta(days=days)
 
@@ -563,6 +571,207 @@ def _daily_freshness(request: Request, rows: list[dict], end: date) -> dict:
     from app.services.quote_freshness import QuoteFreshness
 
     return QuoteFreshness.for_request(request).describe(rows[-1] if rows else None, historical=end < cn_today())
+
+
+# 蜡烛形态最长回看 14 根; 45 个日历日 ≈ 30 个交易日, 足够跨过窗口前的预热段。
+_PATTERN_WARMUP_DAYS = 45
+
+
+@router.get("/patterns/meta")
+def get_pattern_meta():
+    """返回 61 个蜡烛形态的列名与中文标签, 供前端指标选择器渲染。"""
+    from app.indicators.patterns import PATTERN_COLUMNS, PATTERN_LABELS
+
+    return {
+        "patterns": [
+            {"key": key, "label": PATTERN_LABELS.get(key, key)} for key in PATTERN_COLUMNS
+        ],
+    }
+
+
+@router.get("/patterns")
+def get_patterns(
+    request: Request,
+    symbol: str = Query(..., description="标的代码,如 000001.SZ"),
+    start_date: str = Query(..., description="起始日期 YYYY-MM-DD"),
+    end_date: str = Query(..., description="截止日期 YYYY-MM-DD"),
+    patterns: str | None = Query(None, description="逗号分隔的形态列名; 缺省 = 全部 61 个"),
+):
+    """计算指定区间内的蜡烛形态命中, 只返回非零命中行。
+
+    独立于 /daily 的按需端点: /daily 是每个行情 tick 都会重拉的热路径, 把 61 列
+    形态塞进它会显著放大响应体与计算量。这里单独取一次, 前端只在「形态」开关
+    打开时请求, 关闭后零成本。
+
+    形态判定依赖窗口前的预热行 (最长回看 14 根), 因此内部多读 45 个日历日,
+    计算后再裁剪回 [start_date, end_date]。
+    """
+    import polars as pl
+
+    from app.indicators.patterns import PATTERN_COLUMNS, PATTERN_LABELS, compute_patterns_frame
+
+    repo = request.app.state.repo
+    start = _parse_date_param(start_date, "start_date")
+    end = _parse_date_param(end_date, "end_date")
+    if start > end:
+        raise HTTPException(400, "start_date 不能晚于 end_date")
+
+    wanted: tuple[str, ...]
+    if patterns and patterns.strip():
+        requested = {part.strip() for part in patterns.split(",") if part.strip()}
+        wanted = tuple(key for key in PATTERN_COLUMNS if key in requested)
+        unknown = requested - set(PATTERN_COLUMNS)
+        if not wanted:
+            raise HTTPException(400, f"未知形态列: {', '.join(sorted(unknown)) or '(空)'}")
+    else:
+        wanted = PATTERN_COLUMNS
+
+    asset_type = repo.resolve_asset_type(symbol)
+    warmup_start = start - timedelta(days=_PATTERN_WARMUP_DAYS)
+    df = repo.get_daily_asset(
+        asset_type, symbol, warmup_start, end,
+        columns=["symbol", "date", "open", "high", "low", "close"],
+    )
+
+    empty = {
+        "symbol": symbol,
+        "asset_type": asset_type,
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+        "patterns": [{"key": key, "label": PATTERN_LABELS.get(key, key)} for key in wanted],
+        "rows": [],
+    }
+    if df.is_empty():
+        return empty
+
+    try:
+        df = compute_patterns_frame(df, needed=wanted)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("形态计算失败 %s: %s", symbol, e)
+        return empty
+
+    df = df.filter((pl.col("date") >= start) & (pl.col("date") <= end)).sort("date")
+    keys = list(wanted)
+    rows: list[dict] = []
+    for rec in df.select(["date", *keys]).iter_rows(named=True):
+        hits = {key: int(rec[key]) for key in keys if rec.get(key)}
+        if hits:
+            rows.append({"date": rec["date"].isoformat(), **hits})
+
+    return {**empty, "rows": rows}
+
+
+@router.get("/chips")
+def get_chips(
+    request: Request,
+    symbol: str = Query(..., description="标的代码,如 000001.SZ"),
+    date_str: str | None = Query(None, alias="date", description="目标交易日 YYYY-MM-DD, 缺省=区间最后一根"),
+    start_date: str | None = Query(None, description="区间起始日, 缺省按回看窗口推算"),
+    end_date: str | None = Query(None, description="区间截止日, 缺省=今天"),
+    accuracy_factor: int = Query(150, ge=20, le=500, description="纵轴价格档位数"),
+    cyq_days: int = Query(210, ge=30, le=500, description="参与衰减的交易日数"),
+):
+    """筹码分布 (CYQ) — 指定交易日的成本结构。
+
+    与 InStock ``CYQCalculator`` 逐位一致; 独立端点, 不进 /daily 热路径。
+
+    换手率口径:
+      - 股票: 直接用 enriched 的 ``turnover_rate`` (百分数)
+      - ETF/LOF/指数: 无股本/换手字段, 用「成交量 / 窗口内最大成交量」代理换手,
+        并在 ``turnover_source`` 里标 ``volume_proxy``, 前端会显示口径提示。
+
+    返回 ``{x, y, b, d, t, benefit_part, avg_cost, percent_chips}``;
+    ``percent_chips`` 的 90/70 各给 ``priceRange`` 与 ``concentration``。
+    """
+    import polars as pl
+
+    from app.indicators.chips import compute_cyq_frame
+
+    repo = request.app.state.repo
+    end = _parse_date_param(end_date, "end_date") if end_date else cn_today()
+    if start_date:
+        start = _parse_date_param(start_date, "start_date")
+    else:
+        # 窗口需要 cyq_days 根交易日, 按 1.5 倍日历日 + 60 天缓冲留足余量
+        start = end - timedelta(days=int(cyq_days * 1.5) + 60)
+    if start > end:
+        raise HTTPException(400, "start_date 不能晚于 end_date")
+
+    asset_type = repo.resolve_asset_type(symbol)
+    # 股票 enriched 自带 turnover_rate (快路径列下推); ETF/LOF/指数没有该列,
+    # 显式请求会让仓库回退到 150 天 warmup 的全量指标重算, 这里按资产类型裁剪。
+    wanted = ["date", "open", "high", "low", "close", "volume"]
+    if asset_type == "stock":
+        wanted.append("turnover_rate")
+    df = repo.get_daily_asset(
+        asset_type, symbol, start, end,
+        columns=wanted,
+    )
+    if df.is_empty():
+        return {
+            "symbol": symbol, "asset_type": asset_type, "date": None,
+            "turnover_source": "turnover_rate" if asset_type == "stock" else "volume_proxy",
+            "chips": {},
+        }
+
+    df = df.sort("date")
+    turnover_source = "turnover_rate"
+    if "turnover_rate" not in df.columns or df["turnover_rate"].null_count() == df.height:
+        # ETF/LOF/指数没有换手率: 用相对成交量做衰减代理, 量纲与「换手百分数」同形
+        turnover_source = "volume_proxy"
+        if "volume" not in df.columns or df["volume"].null_count() == df.height:
+            return {
+                "symbol": symbol, "asset_type": asset_type, "date": None,
+                "turnover_source": "unavailable", "chips": {},
+            }
+        peak = float(df["volume"].max() or 0.0)
+        scale = 100.0 / peak if peak > 0 else 0.0
+        df = df.with_columns(
+            (pl.col("volume").cast(pl.Float64).fill_null(0.0) * scale).alias("turnover_rate")
+        )
+
+    df = df.with_columns(pl.col("turnover_rate").cast(pl.Float64).fill_null(0.0))
+
+    index: int | None = None
+    target: date | None = None
+    if date_str:
+        target = _parse_date_param(date_str, "date")
+        hits = df.with_row_index("__i").filter(pl.col("date") == target)
+        if hits.is_empty():
+            return {
+                "symbol": symbol, "asset_type": asset_type, "date": target.isoformat(),
+                "turnover_source": turnover_source, "chips": {},
+                "detail": "该交易日不在本地日K区间内",
+            }
+        index = int(hits["__i"][0])
+        df = df.head(index + 1)
+    else:
+        target = df["date"][-1]
+        index = df.height - 1
+
+    # InStock 的 crange 是「图表显示区间长度」: 传入数据本身是
+    # tail(crange + cyq_days), 且 end == index - crange + 1 只有落在 0 时才取
+    # tail(cyq_days)。这里已把 df 截断到目标日, 直接用窗口长度作为 crange,
+    # 等价于「以目标日为最后一根、回看 cyq_days 个交易日」。
+    try:
+        chips = compute_cyq_frame(
+            df.select(["date", "open", "high", "low", "close", "turnover_rate"]),
+            index=None,
+            accuracy_factor=accuracy_factor,
+            crange=df.height,
+            cyq_days=cyq_days,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("筹码分布计算失败 %s: %s", symbol, exc)
+        chips = {}
+
+    return {
+        "symbol": symbol,
+        "asset_type": asset_type,
+        "date": target.isoformat() if target else None,
+        "turnover_source": turnover_source,
+        "chips": chips,
+    }
 
 
 def _attach_ext(resp: dict, repo, symbol: str, ext_columns: Optional[str]) -> dict:
