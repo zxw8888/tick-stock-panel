@@ -10,6 +10,7 @@ import { AiReportBubble } from '@/components/financials/AiReportBubble'
 import { DailyDataHealthNotice } from '@/components/data/DailyDataHealthNotice'
 import { StockAnalysisHost } from '@/components/stock-analysis/StockAnalysisHost'
 import { StockPreviewHost } from '@/components/StockPreviewHost'
+import { RecommendedStrategiesPrompt } from '@/components/RecommendedStrategiesPrompt'
 import { StockAnalysisBubble } from '@/components/stock-analysis/StockAnalysisBubble'
 import {
   useCapabilityMatrix,
@@ -1178,6 +1179,7 @@ export function Layout() {
       <StockAnalysisHost />
       <StockAnalysisBubble />
       <StockPreviewHost />
+      <RecommendedStrategiesPrompt />
 
       {/* 开启实时行情 + 排队中的挖掘任务 → 冲突确认 */}
       {miningQueuedWarning != null && (

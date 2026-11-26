@@ -7,6 +7,7 @@ import { QK } from '@/lib/queryKeys'
 import { selectableStrategies, strategyOptionLabel } from '@/lib/strategyLibrary'
 import { toPercentages, normalizeWeights } from '@/lib/weights'
 import { groupParams, visibleParams } from '@/lib/strategyParams'
+import { suitableSections } from '@/lib/suitableFor'
 import { toast } from '@/components/Toast'
 import { BUILTIN_COLUMNS } from '@/lib/watchlist-columns'
 import { color } from '@/lib/colors'
@@ -720,6 +721,31 @@ export function StrategySettingsDialog({ strategyId, onClose, onSaved, onAiModif
                           )}
                         </Card>
                       </div>
+
+                      {detail.suitable_for && (
+                        <Card
+                          icon={Sparkles}
+                          title="适用股票"
+                          accent="text-amber-400"
+                          extra={<span className="text-[10px] text-muted/60">推荐策略画像 · 只读</span>}
+                        >
+                          <div className="space-y-1.5">
+                            <div className="grid gap-x-4 gap-y-1 text-[11px] leading-5 sm:grid-cols-2">
+                              {suitableSections(detail.suitable_for).map(section => (
+                                <div key={section.label} className="flex gap-2">
+                                  <span className="w-12 shrink-0 text-muted">{section.label}</span>
+                                  <span className="min-w-0 text-secondary">{section.values.join(' / ')}</span>
+                                </div>
+                              ))}
+                            </div>
+                            {detail.suitable_for.note && (
+                              <p className="rounded-lg border border-amber-500/15 bg-amber-500/5 px-3 py-2 text-[11px] leading-5 text-secondary">
+                                {detail.suitable_for.note}
+                              </p>
+                            )}
+                          </div>
+                        </Card>
+                      )}
 
                       {/* 叠加条件: 每策略 overlay 硬过滤, 不改策略代码 */}
                       <Card

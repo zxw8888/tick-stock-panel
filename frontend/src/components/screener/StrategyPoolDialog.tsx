@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Reorder, useDragControls } from 'framer-motion'
-import { Archive, ArchiveRestore, ArrowDown, ArrowUp, FolderPlus, GripVertical, Layers, Loader2, Plus, Search, Trash2, X } from 'lucide-react'
+import { Archive, ArchiveRestore, ArrowDown, ArrowUp, FolderPlus, GripVertical, Layers, Loader2, Plus, Search, Sparkles, Trash2, X } from 'lucide-react'
 import { Modal } from '@/components/Modal'
 import { toast } from '@/components/Toast'
 import { api, type StrategyDetail, type StrategyPoolGroup } from '@/lib/api'
 import { cn } from '@/lib/cn'
 import { storage } from '@/lib/storage'
 import type { StrategyPool } from '@/lib/useStrategyPool'
+import { MARKET_CAP_LABELS, STYLE_LABELS, matchesSuitableFor, suitableFilterOptions, suitableTags } from '@/lib/suitableFor'
+import { RecommendedStrategiesDialog } from './RecommendedStrategiesDialog'
 import './StrategyPoolDialog.css'
 
 interface Props {
@@ -203,10 +205,14 @@ export function StrategyPoolDialog({ pool, onAdded, onClose }: Props) {
   const [sort, setSort] = useState<LibrarySort>(loadLibrarySort)
   const [search, setSearch] = useState('')
   const [timeframe, setTimeframe] = useState('all')
+  const [recommendedOnly, setRecommendedOnly] = useState(false)
+  const [marketCapFilter, setMarketCapFilter] = useState('')
+  const [styleFilter, setStyleFilter] = useState('')
   // 左侧视图: 策略库 / 档案库 (桌面与移动共用; 移动端另有 library 切换)
   const [leftPane, setLeftPane] = useState<'library' | 'archive'>('library')
   const [mobilePane, setMobilePane] = useState<'library' | 'selected' | 'archive'>('library')
   const [showGroups, setShowGroups] = useState(false)
+  const [showRecommended, setShowRecommended] = useState(false)
   const [clearedPool, setClearedPool] = useState<string[] | null>(null)
 
   const changeSort = (mode: LibrarySort) => {
@@ -237,13 +243,19 @@ export function StrategyPoolDialog({ pool, onAdded, onClose }: Props) {
     [allStrategies, archivedSet],
   )
   const query = search.trim().toLowerCase()
+  const suitableOptions = useMemo(() => suitableFilterOptions(publicStrategies), [publicStrategies])
   const matches = (strategy: StrategyDetail) => (activeTab === 'all' || strategy.source === activeTab)
     && (timeframe === 'all' || (strategy.timeframes?.length ? strategy.timeframes : ['1d']).includes(timeframe))
-    && `${strategy.name} ${strategy.id} ${strategy.description}`.toLowerCase().includes(query)
+    && (!recommendedOnly || strategy.origin === 'recommended')
+    && matchesSuitableFor(strategy.suitable_for, { marketCap: marketCapFilter, style: styleFilter })
+    && `${strategy.name} ${strategy.id} ${strategy.description} ${strategy.suitable_for?.note ?? ''}`.toLowerCase().includes(query)
   const matchesGroup = (strategy: StrategyDetail, filter: string) => filter === 'all'
     || (filter === 'none' ? !metaMap.get(strategy.id)?.group : metaMap.get(strategy.id)?.group === filter)
   // 列表与分组批量操作共用筛选结果, 分组之间的数量不受当前选中分组限制。
-  const matchingStrategies = useMemo(() => publicStrategies.filter(matches), [publicStrategies, activeTab, timeframe, query])
+  const matchingStrategies = useMemo(
+    () => publicStrategies.filter(matches),
+    [publicStrategies, activeTab, timeframe, query, recommendedOnly, marketCapFilter, styleFilter],
+  )
   const visible = useMemo(() => {
     const list = matchingStrategies.filter(strategy => matchesGroup(strategy, groupFilter))
     if (sort === 'default') return list
@@ -332,11 +344,17 @@ export function StrategyPoolDialog({ pool, onAdded, onClose }: Props) {
   )
 
   return <>
-    <Modal ariaLabel="策略库" active={!showGroups} onClose={() => { if (!publishingId) onClose() }} closeOnBackdrop={!publishingId}
+    <Modal ariaLabel="策略库" active={!showGroups && !showRecommended} onClose={() => { if (!publishingId) onClose() }} closeOnBackdrop={!publishingId && !showRecommended}
       panelClassName="strategy-library-dialog flex h-[92%] w-[96%] max-w-[1440px] max-h-[900px] flex-col overflow-hidden rounded-card border border-border bg-surface shadow-2xl">
       <header className="flex shrink-0 items-center justify-between gap-3 border-b border-border px-4 py-2.5 sm:px-5">
         <div className="flex min-w-0 flex-wrap items-baseline gap-x-4 gap-y-1"><h2 className="flex shrink-0 items-center gap-2 text-sm font-semibold text-foreground"><Layers className="h-4 w-4 self-center text-accent" />策略库</h2><p className="text-[11px] leading-5 text-muted">勾选参与扫描，拖动调整顺序；分组与归档即时生效。</p></div>
-        <button type="button" aria-label="关闭" disabled={!!publishingId} onClick={onClose} className="rounded-btn p-1.5 text-muted hover:bg-elevated hover:text-foreground disabled:opacity-40"><X className="h-4 w-4" /></button>
+        <div className="flex shrink-0 items-center gap-2">
+          <button type="button" disabled={!!publishingId} onClick={() => setShowRecommended(true)}
+            className="inline-flex h-7 items-center gap-1 rounded-btn border border-amber-500/30 bg-amber-500/10 px-2.5 text-[11px] font-medium text-amber-400 transition-colors hover:bg-amber-500/15 disabled:opacity-40">
+            <Sparkles className="h-3.5 w-3.5" />推荐策略
+          </button>
+          <button type="button" aria-label="关闭" disabled={!!publishingId} onClick={onClose} className="rounded-btn p-1.5 text-muted hover:bg-elevated hover:text-foreground disabled:opacity-40"><X className="h-4 w-4" /></button>
+        </div>
       </header>
       {loadError && <div role="alert" className="flex shrink-0 items-center gap-3 border-b border-danger/20 bg-danger/5 px-4 py-3 text-xs text-danger"><span className="min-w-0 flex-1 break-words">策略列表加载失败：{loadError}</span><button type="button" onClick={() => void loadStrategies()} className="shrink-0 underline">重试</button></div>}
       {publishError && <p role="alert" className="shrink-0 border-b border-danger/20 bg-danger/5 px-4 py-2 text-xs text-danger">发布失败：{publishError}</p>}
@@ -360,6 +378,24 @@ export function StrategyPoolDialog({ pool, onAdded, onClose }: Props) {
                 <select aria-label="策略池排序" value={sort} onChange={event => changeSort(event.target.value as LibrarySort)} className="h-8 rounded-input border border-border bg-base px-2 text-xs text-secondary focus:border-accent focus:outline-none">
                   {SORT_OPTIONS.map(option => <option key={option.id} value={option.id}>{option.label}</option>)}
                 </select>
+              </div>
+              <div className="flex flex-wrap items-center gap-1.5" aria-label="推荐策略筛选">
+                <button type="button" aria-pressed={recommendedOnly} onClick={() => setRecommendedOnly(value => !value)}
+                  className={cn('inline-flex h-7 items-center gap-1 rounded-btn border px-2 text-[11px] transition-colors',
+                    recommendedOnly ? 'border-amber-500/40 bg-amber-500/10 text-amber-400' : 'border-border text-muted hover:text-foreground')}>
+                  <Sparkles className="h-3 w-3" />仅看推荐
+                </button>
+                <select aria-label="按市值筛选策略" value={marketCapFilter} onChange={event => setMarketCapFilter(event.target.value)} className="h-7 rounded border border-border bg-base px-1 text-[10px] text-secondary focus:border-accent focus:outline-none">
+                  <option value="">全部市值</option>
+                  {suitableOptions.marketCaps.map(value => <option key={value} value={value}>{MARKET_CAP_LABELS[value] ?? value}</option>)}
+                </select>
+                <select aria-label="按风格筛选策略" value={styleFilter} onChange={event => setStyleFilter(event.target.value)} className="h-7 rounded border border-border bg-base px-1 text-[10px] text-secondary focus:border-accent focus:outline-none">
+                  <option value="">全部风格</option>
+                  {suitableOptions.styles.map(value => <option key={value} value={value}>{STYLE_LABELS[value] ?? value}</option>)}
+                </select>
+                {(recommendedOnly || marketCapFilter || styleFilter) && (
+                  <button type="button" onClick={() => { setRecommendedOnly(false); setMarketCapFilter(''); setStyleFilter('') }} className="text-[10px] text-muted underline hover:text-foreground">清除</button>
+                )}
               </div>
               {/* 来源分类: 切换时重置下级分组筛选 */}
               <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1" aria-label="策略来源分类">
@@ -411,10 +447,16 @@ export function StrategyPoolDialog({ pool, onAdded, onClose }: Props) {
                       <div className="flex items-start gap-2">
                         <span className="strategy-library-strategy-name min-w-0 break-words text-xs font-medium text-foreground" title={strategy.name}>{strategy.name}</span>
                         <span className={cn('shrink-0 rounded border px-1 py-px text-[10px] leading-tight', SOURCE_CLS[strategy.source] ?? SOURCE_CLS.custom)}>{SOURCE_LABEL[strategy.source] ?? strategy.source}</span>
+                        {strategy.origin === 'recommended' && <span className="shrink-0 rounded border border-amber-500/30 bg-amber-500/10 px-1 py-px text-[10px] leading-tight text-amber-400">推荐</span>}
                         <span className="shrink-0 text-[10px] text-muted">{strategy.timeframes?.includes('1m') ? '分钟' : '日线'}</span>
                       </div>
                       <p className="mt-0.5 truncate text-[10px] leading-4 text-muted" title={`${strategy.id}${meta?.added_at ? ` · 加入于 ${fmtTime(meta.added_at)}` : ''}`}>{strategy.id}{meta?.added_at && <span className="ml-2">加入于 {fmtTime(meta.added_at)}</span>}</p>
                       {strategy.description && <p className="mt-0.5 truncate text-[11px] leading-4 text-secondary" title={strategy.description}>{strategy.description}</p>}
+                      {suitableTags(strategy.suitable_for, 3).length > 0 && (
+                        <div className="mt-1 flex flex-wrap gap-1">
+                          {suitableTags(strategy.suitable_for, 3).map(tag => <span key={tag} className="rounded-full bg-elevated px-1.5 py-px text-[9px] text-muted">{tag}</span>)}
+                        </div>
+                      )}
                     </div>
                   </label>
                   <div className="strategy-library-row-actions ml-6 flex shrink-0 items-center justify-end gap-1.5">
@@ -491,5 +533,10 @@ export function StrategyPoolDialog({ pool, onAdded, onClose }: Props) {
     </Modal>
     {showGroups && <GroupsManagerModal groups={groups} active onClose={() => setShowGroups(false)}
       onCreate={pool.createGroup} onRename={pool.renameGroup} onReorder={pool.reorderGroups} onDelete={pool.deleteGroup} />}
+    {showRecommended && <RecommendedStrategiesDialog
+      open
+      onClose={() => setShowRecommended(false)}
+      onInstalled={() => { void loadStrategies() }}
+    />}
   </>
 }

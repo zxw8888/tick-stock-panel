@@ -99,6 +99,13 @@ def get_options():
         "macd": "MACD", "boll": "布林带 BOLL", "kdj": "KDJ",
         "atr": "ATR", "volume": "量价", "extremes": "极值",
         "momentum": "动量", "volatility": "波动率", "rsi": "RSI",
+        # InStock 移植指标分组
+        "ext_ma": "扩展 · 均线", "ext_bias": "扩展 · 乖离",
+        "ext_momentum": "扩展 · 动量", "ext_trend": "扩展 · 趋势",
+        "ext_oscillator": "扩展 · 震荡", "ext_volume": "扩展 · 量能",
+        "ext_other": "扩展 · 其他",
+        # TA-Lib 蜡烛形态
+        "pattern": "K线形态",
     }
     # 行情类字段不在 ENRICHED_COLUMNS_BY_CATEGORY 里, 单独归一组
     quote_fields = {"open", "high", "low", "close", "volume", "amount",

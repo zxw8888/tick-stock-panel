@@ -21,6 +21,49 @@ logger = logging.getLogger(__name__)
 
 _EXCHANGES = ["SH", "SZ", "BJ"]
 
+# 单交易所返回行数低于历史同期的一半即视为响应不完整（退市不可能一天砍掉一半）。
+# 此时保留该交易所的存量行，避免数据源短暂故障把整个市场从维表里抹掉。
+_MIN_EXCHANGE_RATIO = 0.5
+
+
+def _read_existing_instruments(data_dir: Path) -> pl.DataFrame | None:
+    """读取现有维表；缺失/损坏时返回 None（首次同步场景）。"""
+    path = data_dir / "instruments" / "instruments.parquet"
+    if not path.exists():
+        return None
+    try:
+        existing = pl.read_parquet(path)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("instruments 历史维表读取失败: %s", e)
+        return None
+    return existing if "symbol" in existing.columns else None
+
+
+def _existing_rows_for_exchanges(
+    existing: pl.DataFrame | None,
+    exchanges: set[str],
+    schema: dict[str, pl.DataType],
+) -> pl.DataFrame | None:
+    """取出失败交易所的历史行，并对齐到本次新数据的列与类型。"""
+    if existing is None or not exchanges:
+        return None
+    if "exchange" in existing.columns:
+        mask = pl.col("exchange").cast(pl.Utf8).is_in(list(exchanges))
+    else:
+        mask = pl.any_horizontal([
+            pl.col("symbol").cast(pl.Utf8).str.ends_with(f".{ex}") for ex in exchanges
+        ])
+    kept = existing.filter(mask)
+    if kept.is_empty():
+        return None
+    # 历史表多出的列(如 as_of)不参与拼接，缺失的列补 null，最后统一 cast 到新表 schema。
+    exprs = [
+        pl.col(c).cast(dtype, strict=False).alias(c) if c in kept.columns
+        else pl.lit(None, dtype=dtype).alias(c)
+        for c, dtype in schema.items()
+    ]
+    return kept.select(exprs)
+
 
 def _flatten_instruments(items: list[dict], *, current_limits: bool = True) -> list[dict]:
     """把 SDK 返回的 Instrument 列表 flatten 成扁平行。"""
@@ -78,7 +121,16 @@ def sync_instruments(data_dir: Path) -> int:
 
     返回写入的行数。
     """
+    existing = _read_existing_instruments(data_dir)
+    prev_counts: dict[str, int] = {}
+    if existing is not None and "exchange" in existing.columns:
+        counts = existing.group_by("exchange").len()
+        prev_counts = dict(zip(
+            counts["exchange"].to_list(), counts["len"].to_list(), strict=True,
+        ))
+
     all_rows = _fetch_instruments_via_provider()
+    incomplete: set[str] = set()
     if all_rows is None:
         # 未命中非 tickflow provider → 走 tickflow 直连
         tf = get_client()
@@ -88,16 +140,43 @@ def sync_instruments(data_dir: Path) -> int:
         for ex in _EXCHANGES:
             try:
                 items = tf.exchanges.get_instruments(ex, instrument_type="stock")
-                if items:
-                    all_rows.extend(_flatten_instruments(items, current_limits=current_limits))
-                    logger.info("instruments %s: %d stocks", ex, len(items))
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 logger.warning("get_instruments(%s) failed: %s", ex, e)
+                incomplete.add(ex)
+                continue
+            if not items:
+                logger.warning("get_instruments(%s) returned no rows, keeping previous", ex)
+                incomplete.add(ex)
+                continue
+            prev_count = prev_counts.get(ex, 0)
+            if prev_count and len(items) < prev_count * _MIN_EXCHANGE_RATIO:
+                logger.warning(
+                    "get_instruments(%s) returned only %d rows (previous %d), keeping previous",
+                    ex, len(items), prev_count,
+                )
+                incomplete.add(ex)
+                continue
+            all_rows.extend(_flatten_instruments(items, current_limits=current_limits))
+            logger.info("instruments %s: %d stocks", ex, len(items))
 
     if not all_rows:
+        # 所有交易所都失败: 保留原维表，绝不能写成空表/半张表。
+        logger.warning("instruments sync skipped: no complete exchange payload")
         return 0
 
     df = pl.DataFrame(all_rows)
+    # 失败交易所的行按原样保留（含股本/上市日/名称），新数据在前面优先。
+    kept = _existing_rows_for_exchanges(existing, incomplete, df.schema)
+    if kept is not None:
+        logger.info(
+            "instruments keeping %d previous rows for incomplete exchanges: %s",
+            kept.height, ",".join(sorted(incomplete)),
+        )
+        schema = df.schema
+        df = pl.concat([df, kept], how="vertical_relaxed").select([
+            pl.col(c).cast(dtype, strict=False).alias(c) for c, dtype in schema.items()
+        ])
+        df = df.unique(subset=["symbol"], keep="first", maintain_order=True)
     df = _preserve_instrument_fields(df, data_dir)
     df = df.with_columns(pl.lit(cn_today()).alias("as_of"))
 

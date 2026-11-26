@@ -249,6 +249,9 @@ const COMPACT_THRESHOLD = 60
 /** 加入自选日竖线颜色 (蓝色虚线, 与同花顺的标注观感一致) */
 const ADDED_DATE_COLOR = '#3B82F6'
 
+/** 形态标签在蜡烛上方的额外抬升 (px): 与涨停/炸板标签同处 high 上方时错开。 */
+const PATTERN_LABEL_LIFT = 20
+
 /** 子图上方信息栏高度 (px) */
 const INFO_BAR_H = 16
 /** 子图之间的间距 (px) */
@@ -380,17 +383,19 @@ function buildOption(
 
       if (m.above) {
         const dotColor = m.color ?? (isBuy ? '#FACC15' : CT().text)
+        // 形态标签与异动标签同为 above; 形态额外上抬, 避免同日两者叠在一起。
+        const lift = m.pattern ? PATTERN_LABEL_LIFT : 0
         if (compact) {
           markPointData.push({
             name: m.date, coord: [m.date, d.high],
-            symbol: 'circle', symbolSize: 4, symbolOffset: [0, -10],
+            symbol: 'circle', symbolSize: 4, symbolOffset: [0, -10 - lift],
             itemStyle: { color: dotColor, cursor: 'pointer' },
             label: { show: false }, z: 100, zlevel: 10,
           })
         } else {
           markPointData.push({
             name: m.date, coord: [m.date, d.high],
-            symbol: 'circle', symbolSize: 12, symbolOffset: [0, -2],
+            symbol: 'circle', symbolSize: 12, symbolOffset: [0, -2 - lift],
             itemStyle: { color: 'transparent' },
             label: {
               show: true, formatter: m.label ?? '', position: 'top', distance: 0,
@@ -1074,17 +1079,18 @@ export function EChartsCandlestick({
       const isSell = m.kind === 'sell'
       if (m.above) {
         const dotColor = m.color ?? (isBuy ? '#FACC15' : CT().text)
+        const lift = m.pattern ? PATTERN_LABEL_LIFT : 0
         if (compact) {
           markPointData.push({
             name: m.date, coord: [m.date, d.high],
-            symbol: 'circle', symbolSize: 4, symbolOffset: [0, -10],
+            symbol: 'circle', symbolSize: 4, symbolOffset: [0, -10 - lift],
             itemStyle: { color: dotColor, cursor: 'pointer' },
             label: { show: false }, z: 100, zlevel: 10,
           })
         } else {
           markPointData.push({
             name: m.date, coord: [m.date, d.high],
-            symbol: 'circle', symbolSize: 12, symbolOffset: [0, -2],
+            symbol: 'circle', symbolSize: 12, symbolOffset: [0, -2 - lift],
             itemStyle: { color: 'transparent' },
             label: {
               show: true, formatter: m.label ?? '', position: 'top', distance: 0,

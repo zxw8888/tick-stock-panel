@@ -86,6 +86,11 @@ def get_settings() -> dict:
         "onboarding_completed": preferences.get_onboarding_completed(),
         # 配置文件位置 (AI 与数据源 Key 统一存放, 支持外部编辑后热加载)
         "secrets_path": str(secrets_store.file_path()),
+        # 东财登录态 Cookie (可选): 仅用于 LOF/ETF 的东财兜底通道, 降低匿名限流
+        "has_eastmoney_cookie": bool(secrets_store.get_eastmoney_cookie()),
+        "eastmoney_cookie_masked": secrets_store.mask(
+            secrets_store.get_eastmoney_cookie(), prefix=0, suffix=0,
+        ),
         # AI 配置
         "ai_provider": ai_provider,
         "ai_protocol": current_ai_protocol(),
@@ -565,6 +570,10 @@ class PluginKeyIn(BaseModel):
     api_key: str
 
 
+class EastmoneyCookieIn(BaseModel):
+    cookie: str
+
+
 class DataSourceJobTimeoutPrefs(BaseModel):
     data_source_job_timeout_s: int = Field(ge=60)
     data_source_long_job_timeout_s: int = Field(ge=60)
@@ -816,6 +825,31 @@ def clear_plugin_key(name: str) -> dict:
         "plugin_available": bool(status and status.get("available")),
         "plugin": status,
     }
+
+
+@router.post("/eastmoney-cookie")
+def save_eastmoney_cookie(req: EastmoneyCookieIn) -> dict:
+    """保存东方财富登录态 Cookie (可选)。
+
+    东财公开接口不要求鉴权, 该 Cookie 仅用于降低匿名限流概率;
+    因此不做在线探活 (避免把配置动作变成一次可能被限流的请求),
+    只做格式清洗 (去换行/首尾空白) 后落 secrets.json。
+    """
+    value = secrets_store.set_eastmoney_cookie(req.cookie)
+    if not value:
+        return {"ok": False, "error": "cookie empty"}
+    return {
+        "ok": True,
+        "has_eastmoney_cookie": True,
+        "eastmoney_cookie_masked": secrets_store.mask(value, prefix=0, suffix=0),
+    }
+
+
+@router.delete("/eastmoney-cookie")
+def clear_eastmoney_cookie() -> dict:
+    """清除东财 Cookie, 回到匿名访问。"""
+    secrets_store.clear(secrets_store.EASTMONEY_COOKIE_FIELD)
+    return {"ok": True, "has_eastmoney_cookie": False, "eastmoney_cookie_masked": ""}
 
 
 @router.post("/data-sources/reload")

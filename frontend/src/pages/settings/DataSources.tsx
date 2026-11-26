@@ -45,7 +45,7 @@ import { DEFAULT_ROUTING, buildProviderRouting } from '@/lib/provider-routing'
 import { toast } from '@/components/Toast'
 import { PluginMetadata } from '@/components/data/PluginMetadata'
 import { DataSourceEditor } from './DataSourceEditor'
-import { TickFlowKeySection, TierHelpPopover, useInvalidateTierRelated } from './Keys'
+import { EastmoneyCookieSection, TickFlowKeySection, TierHelpPopover, useInvalidateTierRelated } from './Keys'
 
 const DATASET_LABEL: Record<string, string> = {
   realtime: '实时',
@@ -703,6 +703,9 @@ export function SettingsDataSourcesPanel({ highlight }: { highlight?: string } =
     <div className="space-y-5 max-w-5xl">
       {/* ===== 上区: 能力路由 (能力为主视图, 点标签切换提供方) ===== */}
       <CapabilityRoutingSection />
+
+      {/* 东财登录态 Cookie (可选): 只影响 LOF/ETF 的东财兜底通道 */}
+      <EastmoneyCookieSection />
 
       {/* ===== 下区: 数据源 (源为主视图, 配置/接入) ===== */}
       <AnchorWrap highlight={highlight} anchor="data-sources">

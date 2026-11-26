@@ -13,6 +13,7 @@ import {
   Save,
   Check,
   HelpCircle,
+  Cookie,
 } from 'lucide-react'
 import { api } from '@/lib/api'
 import { useSettings } from '@/lib/useSharedQueries'
@@ -253,6 +254,141 @@ export function TickFlowKeySection({ right }: { right?: React.ReactNode }) {
         </div>
       )}
     </div>
+  )
+}
+
+/**
+ * 东方财富 Cookie 配置区块 (可选)。
+ *
+ * 只作用于 LOF/ETF 的东财兜底通道 (基金总表 / push2his 日K / push2 实时),
+ * 不配置也能取数; 登录态 Cookie 用于降低匿名限流概率。明文只落本地
+ * secrets.json, 接口返回一律脱敏。
+ */
+export function EastmoneyCookieSection() {
+  const settings = useSettings()
+  const qc = useQueryClient()
+  const [input, setInput] = useState('')
+  const [revealing, setRevealing] = useState(false)
+  const [saved, setSaved] = useState(false)
+
+  const hasCookie = Boolean(settings.data?.has_eastmoney_cookie)
+  const masked = settings.data?.eastmoney_cookie_masked ?? ''
+
+  const save = useMutation({
+    mutationFn: () => api.saveEastmoneyCookie(input.trim()),
+    onSuccess: (data) => {
+      qc.invalidateQueries({ queryKey: QK.settings })
+      if (data.ok) {
+        setInput('')
+        setSaved(true)
+        setTimeout(() => setSaved(false), 2000)
+      }
+    },
+  })
+
+  const clear = useMutation({
+    mutationFn: () => api.clearEastmoneyCookie(),
+    onSuccess: () => qc.invalidateQueries({ queryKey: QK.settings }),
+  })
+
+  return (
+    <section className="rounded-card border border-border bg-surface p-4">
+      <div className="flex items-start gap-3">
+        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-elevated">
+          <Cookie className="h-4 w-4 text-secondary" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="text-xs font-medium text-foreground">东方财富 Cookie</h3>
+            <span className="rounded bg-elevated px-1.5 py-0.5 text-[9px] font-medium text-muted">可选</span>
+            {hasCookie ? (
+              <span className="inline-flex items-center gap-1 rounded bg-bear/10 px-1.5 py-0.5 text-[10px] text-bear">
+                <CheckCircle2 className="h-2.5 w-2.5" />
+                已配置
+              </span>
+            ) : (
+              <span className="text-[10px] text-muted">匿名访问</span>
+            )}
+          </div>
+          <p className="mt-1 text-[11px] leading-relaxed text-secondary">
+            用于 LOF/ETF 的东财兜底通道（基金总表 / push2his 日K / push2 实时）。
+            不配置也能取数，配置登录态可降低匿名限流概率；Cookie 只存本地
+            <span className="mx-1 font-mono text-[10px]">secrets.json</span>，不上传任何第三方。
+          </p>
+        </div>
+        {hasCookie && (
+          <button
+            type="button"
+            onClick={() => clear.mutate()}
+            disabled={clear.isPending}
+            className="inline-flex shrink-0 items-center gap-1 rounded-btn bg-elevated px-2.5 py-1 text-xs text-secondary transition-colors hover:text-danger disabled:opacity-50"
+          >
+            <Trash2 className="h-3 w-3" />
+            清除
+          </button>
+        )}
+      </div>
+
+      <form
+        onSubmit={(e) => {
+          e.preventDefault()
+          if (input.trim()) save.mutate()
+        }}
+        className="mt-3 flex items-center gap-2"
+      >
+        <div className="relative min-w-0 flex-1">
+          <input
+            type={revealing ? 'text' : 'password'}
+            value={input}
+            onChange={(e) => {
+              setInput(e.target.value)
+              if (saved) setSaved(false)
+            }}
+            placeholder={
+              hasCookie
+                ? `已配置 ${masked}，粘贴新 Cookie 替换`
+                : '粘贴 eastmoney.com 登录后的 Cookie 字符串'
+            }
+            aria-label="东方财富 Cookie"
+            className="w-full rounded-input border border-border bg-base px-3 py-2 pr-9 font-mono text-sm transition-colors focus:border-accent focus:outline-none"
+          />
+          <button
+            type="button"
+            onClick={() => setRevealing((v) => !v)}
+            tabIndex={-1}
+            aria-label={revealing ? '隐藏' : '显示'}
+            className="absolute right-2 top-1/2 -translate-y-1/2 text-muted transition-colors hover:text-foreground"
+          >
+            {revealing ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+          </button>
+        </div>
+        <button
+          type="submit"
+          disabled={save.isPending || !input.trim()}
+          className="flex h-9 shrink-0 items-center justify-center gap-2 rounded-xl bg-accent px-4 text-sm font-semibold text-white transition-all hover:bg-accent/90 disabled:opacity-40"
+        >
+          {save.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : saved ? <Check className="h-4 w-4" /> : <Save className="h-4 w-4" />}
+          {save.isPending ? '保存中...' : saved ? '已保存' : '保存'}
+        </button>
+      </form>
+
+      {save.isError && (
+        <div className="mt-2 text-xs text-danger">
+          保存失败：{String((save.error as Error).message)}
+        </div>
+      )}
+      {save.data && !save.data.ok && (
+        <div className="mt-2 text-xs text-danger">
+          {save.data.error === 'cookie empty' ? 'Cookie 不能为空' : save.data.error ?? '保存失败'}
+        </div>
+      )}
+      {saved && (
+        <div className="mt-2 flex items-center gap-1.5 text-xs text-bear">
+          <CheckCircle2 className="h-3 w-3" />
+          已保存，下一次东财请求生效
+        </div>
+      )}
+    </section>
   )
 }
 

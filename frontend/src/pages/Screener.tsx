@@ -27,6 +27,7 @@ import { StrategySettingsDialog } from '@/components/screener/StrategySettingsDi
 import { DefaultStrategyParamsDialog } from '@/components/screener/DefaultStrategyParamsDialog'
 import { ResourceTransferButton } from '@/components/ResourceTransferDialog'
 import { StrategyPoolDialog } from '@/components/screener/StrategyPoolDialog'
+import { RecommendedStrategiesDialog } from '@/components/screener/RecommendedStrategiesDialog'
 import { cn } from '@/lib/cn'
 import { StrategyBuilderDialog } from '@/components/screener/StrategyBuilderDialog'
 import { StrategyStoreDialog } from '@/components/screener/StrategyStoreDialog'
@@ -67,6 +68,7 @@ export function Screener() {
   }, [])
   const [settingsStrategyId, setSettingsStrategyId] = useState<string | null>(null)
   const [showPoolDialog, setShowPoolDialog] = useState(false)
+  const [showRecommendedDialog, setShowRecommendedDialog] = useState(false)
   const [showBuilder, setShowBuilder] = useState(false)
   const [builderMode, setBuilderMode] = useState<'create' | 'modify'>('create')
   const [showStore, setShowStore] = useState(false)
@@ -929,6 +931,7 @@ export function Screener() {
         name={s.name}
         description={s.description}
         source={s.source}
+        origin={s.origin}
         active={activeStrategy === s.id}
         count={hitCounts[id]}
         expiredCount={expiredCounts[id]}
@@ -1056,6 +1059,17 @@ export function Screener() {
               <span className="ml-0.5 min-w-[28px] h-4 flex items-center justify-center rounded-full bg-accent/15 text-accent text-[10px] font-bold">
                 {visiblePool.length}/{strategyPresets.length}
               </span>
+            </button>
+            {/* 推荐策略包入口 */}
+            <button
+              onClick={() => setShowRecommendedDialog(true)}
+              title="安装或更新随程序分发的推荐策略"
+              className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-btn
+                border border-amber-500/30 bg-amber-500/10 text-xs font-medium text-amber-400
+                hover:bg-amber-500/15 transition-colors cursor-pointer"
+            >
+              <Sparkles className="h-3.5 w-3.5" />
+              推荐
             </button>
             {/* 创建叠加策略 */}
             <button
@@ -1458,6 +1472,10 @@ export function Screener() {
           onClose={() => setShowPoolDialog(false)}
         />
       )}
+      <RecommendedStrategiesDialog
+        open={showRecommendedDialog}
+        onClose={() => setShowRecommendedDialog(false)}
+      />
       <StrategyBuilderDialog
         open={showBuilder}
         onClose={() => setShowBuilder(false)}

@@ -104,6 +104,14 @@ hiddenimports += [
 if find_spec("pytdx") is not None:
     hiddenimports += collect_submodules("pytdx")
 
+# codecs.lookup("idna") 在冻结包里会 import encodings.idna → stringprep。
+# PyInstaller 只把 encodings.idna 本体收进 base_library.zip, 不分析其依赖,
+# 运行期表现为 LookupError: unknown encoding: idna —— httpx 的所有请求直接失败
+# (实时行情 / ext 拉取), 但历史日K/形态/筹码不受影响, 极易漏诊。
+hiddenimports += ["encodings.idna", "encodings.punycode", "stringprep"]
+if find_spec("idna") is not None:
+    hiddenimports += collect_submodules("idna")
+
 # ── 后端源码扩展 (app/custom/*) ──────────────────────────────────────
 # extensions/loader.py 运行时用 importlib.import_module + pkgutil.iter_modules
 # 发现 app/custom/* — 与插件同样对静态分析不可见, 必须双声明 (issue #459:
@@ -186,6 +194,12 @@ datas += [(str(ROOT / "frontend" / "package.json"), ".")]
 datas += [(RESEARCH_TEMPLATE, "app/strategy/research")]
 # 策略种子 → app/strategy/seeds/ (启动时按路径读取种入 custom, 不进 PYZ)
 datas += [(str(ROOT / "backend" / "app" / "strategy" / "seeds"), "app/strategy/seeds")]
+# 推荐策略包 → app/strategy/recommended_pack/ (启动时按路径读 manifest + 安装到
+# data/strategies/custom, 与 seeds 一样不能进 PYZ)
+datas += [(
+    str(ROOT / "backend" / "app" / "strategy" / "recommended_pack"),
+    "app/strategy/recommended_pack",
+)]
 # AI 指南由 Path(__file__) 读取，必须作为数据文件落盘。
 datas += [(str(ROOT / "backend" / "app" / "strategy" / "prompts"), "app/strategy/prompts")]
 

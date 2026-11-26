@@ -136,7 +136,7 @@ describe('buildAnalysisChartModel', () => {
     })
     expect(model.rows.map(row => row.date)).toEqual(DATES)
     expect(model.annotations.labels).toEqual([
-      { time: '2026-10-30', value: 12, text: '涨停', color: '#FACC15' },
+      { time: '2026-10-30', value: 12, text: '涨停', always: true, color: '#FACC15' },
     ])
     expect(model.annotations.ranges).toEqual([
       { start: '2026-10-29', end: '2026-10-30', label: '事件', color: 'rgba(0,0,0,0.1)' },

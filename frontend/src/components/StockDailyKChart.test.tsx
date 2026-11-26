@@ -11,7 +11,23 @@ const fixture = vi.hoisted(() => ({ rows: [
   { date: '2026-11-05', open: 10.5, high: 11, low: 10, close: 10.8, volume: 100 },
   { date: '2026-11-06', open: 10.2, high: 11.88, low: 9.72, close: 9.72, volume: 100, signal_limit_down: true, signal_broken_limit_up: true },
 ] as KlineRow[] }))
-vi.mock('@tanstack/react-query', () => ({ useQuery: () => ({ data: fixture, isLoading: false, isError: false }) }))
+const queries = vi.hoisted(() => ({ calls: [] as string[] }))
+vi.mock('@tanstack/react-query', () => ({
+  useQuery: (options: { queryKey?: readonly unknown[]; enabled?: boolean }) => {
+    const key = Array.isArray(options?.queryKey) ? String(options.queryKey[0]) : ''
+    queries.calls.push(`${key}:${options?.enabled === false ? 'off' : 'on'}`)
+    if (key === 'kline-patterns-meta') {
+      return {
+        data: { patterns: [{ key: 'hammer', label: '锤头' }, { key: 'engulfing_pattern', label: '吞噬模式' }] },
+        isLoading: false, isError: false,
+      }
+    }
+    if (key === 'kline-patterns') {
+      return { data: { patterns: [], rows: [{ date: '2026-11-05', hammer: 100 }] }, isLoading: false, isError: false }
+    }
+    return { data: fixture, isLoading: false, isError: false }
+  },
+}))
 vi.mock('@/lib/kline', async importOriginal => ({
   ...await importOriginal<typeof import('@/lib/kline')>(), klineDailyQueryOptions: vi.fn(() => ({})),
 }))
@@ -23,6 +39,7 @@ const originalRows = fixture.rows
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
   localStorage.clear()
+  queries.calls = []
   fixture.rows = originalRows
   host = document.createElement('div'); document.body.append(host); root = createRoot(host)
 })
@@ -116,4 +133,43 @@ it('hides the style selector wherever the existing event toggle is unavailable',
   expect(host.querySelector('[aria-label="异动显示方式"]')).toBeNull()
   await render({ showLimitMarkers: false })
   expect(host.querySelector('[aria-label="异动显示方式"]')).toBeNull()
+})
+
+it('keeps the pattern switch off by default and skips its requests entirely', async () => {
+  await render()
+  expect(host.querySelector('[aria-label="K线形态标注"]')).toBeNull()
+  expect(queries.calls).toContain('kline-patterns-meta:off')
+  expect(queries.calls).toContain('kline-patterns:off')
+  expect(props().markers.some((marker: { pattern?: boolean }) => marker.pattern)).toBe(false)
+})
+
+it('enables pattern markers, persists the toggle, and paints the hit on the chart', async () => {
+  await render()
+  const toggle = host.querySelector('button[title="显示K线上的蜡烛形态标注"]') as HTMLButtonElement
+  await act(async () => toggle.click())
+
+  expect(queries.calls).toContain('kline-patterns-meta:on')
+  expect(JSON.parse(localStorage.getItem('stock_daily_pattern_markers')!)).toEqual({ enabled: true, selected: [] })
+  expect(host.querySelector('[aria-label="K线形态标注"]')).not.toBeNull()
+  // 打开开关但还没选形态时, 选择面板自动展开
+  expect(document.querySelector('[aria-label="选择K线形态"]')).not.toBeNull()
+
+  await act(async () => {
+    const checkbox = [...document.querySelectorAll('[role="checkbox"]')]
+      .find(node => node.textContent?.includes('锤头')) as HTMLButtonElement
+    checkbox.click()
+  })
+  expect(JSON.parse(localStorage.getItem('stock_daily_pattern_markers')!)).toEqual({ enabled: true, selected: ['hammer'] })
+  expect(props().markers).toContainEqual(expect.objectContaining({
+    date: '2026-11-05', label: '锤头', pattern: true, above: true,
+  }))
+
+  await act(async () => (host.querySelector('button[title="隐藏K线上的蜡烛形态标注"]') as HTMLButtonElement).click())
+  expect(props().markers.some((marker: { pattern?: boolean }) => marker.pattern)).toBe(false)
+  expect(JSON.parse(localStorage.getItem('stock_daily_pattern_markers')!)).toEqual({ enabled: false, selected: ['hammer'] })
+})
+
+it('hides the pattern switch when marker toggles are disabled', async () => {
+  await render({ showMarkerToggle: false })
+  expect(host.querySelector('[aria-label="K线形态标注"]')).toBeNull()
 })

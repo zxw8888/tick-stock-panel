@@ -289,7 +289,14 @@ class StrategyDependencyResolver:
         plan = FeaturePlan(
             required_features=frozenset(required_features),
             required_signals=frozenset(required_signals),
-            warmup_bars=max(60, int(strategy.lookback_days or 1), scoring_warmup_bars(scoring)),
+            warmup_bars=max(
+                60,
+                int(strategy.lookback_days or 1),
+                scoring_warmup_bars(scoring),
+                # InStock 移植指标的长窗口 (ma200=200, cci_84=84, vhf=28 ...):
+                # warmup 不足时 EMA 递推起点错位, 前 N 根全是 null。
+                _extended_warmup(required_features),
+            ),
         )
         return ResolvedFeaturePlan(
             base_columns=base_columns,
@@ -614,6 +621,13 @@ def _basic_filter_for_asset(basic_filter: dict, asset_type: str) -> dict:
     return sanitized
 
 
+def _extended_warmup(features: set[str]) -> int:
+    """策略引用的 InStock 移植指标所需的最小预热根数 (0 表示没引用)。"""
+    from app.indicators.extended import WARMUP_BARS
+
+    return max((WARMUP_BARS.get(f, 0) for f in features), default=0)
+
+
 def _resolve_base_columns(features: set[str]) -> frozenset[str]:
     storage = set(ENRICHED_STORAGE_COLS)
     base = {"symbol", "date"} | (features & storage)
@@ -627,6 +641,13 @@ def _resolve_base_columns(features: set[str]) -> frozenset[str]:
         base.update({"high", "low", "close"})
     if features & {"vol_ma5", "vol_ma10", "vol_ratio_5d"}:
         base.add("volume")
+    # InStock 移植指标 (extended.py) 的输入需求: 按实际用到的原料补列,
+    # 否则 amount 类指标 (cr/vwma/emv/wt) 会拿到空 amount 算出 null。
+    from app.indicators.extended import BASE_INPUTS_BY_COLUMN
+
+    ext_hit = features & set(BASE_INPUTS_BY_COLUMN)
+    for col in ext_hit:
+        base |= BASE_INPUTS_BY_COLUMN[col]
     base.update({"open", "high", "low", "close", "volume"})
     return frozenset(base & storage)
 
@@ -2731,6 +2752,14 @@ class StrategyBacktestService:
             return None, f"叠加条件编译失败: {e}"
         if expr is None:
             return None, None
+        # 叠加条件可能引用蜡烛形态 / InStock 扩展指标 (按需计算列), 回测面板
+        # 由 compute_indicators(needed=...) 产出, 未显式请求时不带这些列。
+        # 先按需补齐, 否则会误报「缺失列」而不是正常求值。
+        missing = custom_signals.overlay_missing_columns(conditions, panel.columns)
+        if missing:
+            from app.indicators.pipeline import ensure_indicator_columns
+
+            panel = ensure_indicator_columns(panel, set(missing), assume_sorted=True)
         try:
             enriched = custom_signals.materialize_factor_columns(
                 panel, {"__overlay__": expr}

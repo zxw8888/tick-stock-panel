@@ -26,6 +26,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -36,6 +37,7 @@ from datetime import date as _date
 from datetime import datetime
 from datetime import time as _time
 from pathlib import Path
+from typing import Any
 
 import polars as pl
 
@@ -64,7 +66,87 @@ MAX_POSITION_SYMBOLS = 50          # 持仓标的数上限 (防误操作)
 DEFAULT_ACCOUNT_ID = "default"
 _ACCOUNT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
 
+# 账户级自动跟单范围: all=全市场 / symbols=手动指定 / watchlist_group=自选分组动态。
+# 存量账户缺字段时一律归一为 all, 保持旧行为。
+AUTO_SCOPE_TYPES = ("all", "symbols", "watchlist_group")
+DEFAULT_AUTO_SCOPE: dict = {"scope": "all", "symbols": [], "group_id": None}
+
 _MIGRATION_DONE = False
+
+
+# ── 账户级自动跟单范围 ──────────────────────────────────
+def normalize_auto_scope(value: Any) -> dict:
+    """归一化账户跟单范围; 非法配置抛 ValueError (API 层转 400)。"""
+    if value is None:
+        return dict(DEFAULT_AUTO_SCOPE)
+    if not isinstance(value, dict):
+        raise ValueError("auto_scope 必须是对象")
+    scope = str(value.get("scope") or "all").strip().lower()
+    if scope not in AUTO_SCOPE_TYPES:
+        raise ValueError(f"scope 必须是 {AUTO_SCOPE_TYPES} 之一")
+    raw_symbols = value.get("symbols") or []
+    if not isinstance(raw_symbols, list) or any(
+        not isinstance(s, str) or not s.strip() for s in raw_symbols
+    ):
+        raise ValueError("symbols 必须是非空字符串数组")
+    symbols = list(dict.fromkeys(s.strip() for s in raw_symbols))
+    group_id = value.get("group_id")
+    if group_id is not None and not isinstance(group_id, str):
+        raise ValueError("group_id 必须是字符串")
+    group_id = group_id.strip() if group_id else None
+    if scope == "symbols" and not symbols:
+        raise ValueError("scope=symbols 时 symbols 不能为空")
+    if scope == "watchlist_group" and not group_id:
+        raise ValueError("scope=watchlist_group 时必须选择自选分组")
+    if scope == "all":
+        symbols, group_id = [], None
+    elif scope == "symbols":
+        group_id = None
+    else:
+        symbols = []
+    return {"scope": scope, "symbols": symbols, "group_id": group_id}
+
+
+def validate_auto_scope(value: Any) -> dict:
+    """校验并返回归一化后的范围配置。"""
+    return normalize_auto_scope(value)
+
+
+def scope_key(value: Any) -> str:
+    """稳定的范围标识, 用于合成监控规则 id (同范围账户共用一条评估规则)。"""
+    cfg = normalize_auto_scope(value)
+    scope = cfg["scope"]
+    if scope == "all":
+        return "all"
+    if scope == "watchlist_group":
+        return f"g_{cfg['group_id']}"
+    joined = "|".join(sorted(cfg["symbols"]))
+    return "s_" + hashlib.sha256(joined.encode("utf-8")).hexdigest()[:12]
+
+
+def get_auto_scope(data_dir: Path, account_id: str = DEFAULT_ACCOUNT_ID) -> dict:
+    """读取账户范围; 账户缺失/坏数据均回落 all, 绝不阻塞下单链路。"""
+    acc = get_account(data_dir, account_id)
+    if acc is None:
+        return dict(DEFAULT_AUTO_SCOPE)
+    try:
+        return normalize_auto_scope(acc.get("auto_scope"))
+    except ValueError as e:
+        logger.warning("paper account %s auto_scope 非法, 回落 all: %s", account_id, e)
+        return dict(DEFAULT_AUTO_SCOPE)
+
+
+def auto_scope_warning(data_dir: Path, account_id: str = DEFAULT_ACCOUNT_ID) -> str | None:
+    """前端展示用: 动态分组为空/已删除时提示自动跟单已暂停。"""
+    cfg = get_auto_scope(data_dir, account_id)
+    if cfg["scope"] != "watchlist_group":
+        return None
+    from app.strategy.monitor import resolve_scope_symbols
+
+    members = resolve_scope_symbols(cfg, f"paper:{account_id}", label="模拟盘账户")
+    if not members:
+        return "自选分组当前没有标的或已被删除，自动跟单已暂停（不会退化为全市场）"
+    return None
 
 
 # ── 路径与账户目录 ──────────────────────────────────────
@@ -166,9 +248,11 @@ def create_account(
     stamp_tax_pct: float = DEFAULT_STAMP_TAX_PCT,
     slippage_bps: float = DEFAULT_SLIPPAGE_BPS,
     queue_limit_orders: bool = False,
+    auto_scope: Any | None = None,
 ) -> dict:
     """创建账户 (同 id 已存在则原样返回, 不覆盖 — 幂等)。"""
     validate_account_id(account_id)
+    scope_cfg = validate_auto_scope(auto_scope)
     with PAPER_LOCK:
         existing = get_account(data_dir, account_id)
         if existing is not None:
@@ -184,6 +268,7 @@ def create_account(
             "stamp_tax_pct": float(stamp_tax_pct),
             "slippage_bps": float(slippage_bps),
             "queue_limit_orders": bool(queue_limit_orders),
+            "auto_scope": scope_cfg,
             "status": "active",  # active / frozen
             "created_at": _now_iso(),
         }
@@ -229,21 +314,26 @@ def list_accounts(data_dir: Path) -> list[dict]:
             "cash": acc.get("cash"),
             "latest_nav": nav[-1]["nav"] if nav else acc.get("cash"),
             "created_at": acc.get("created_at"),
+            "auto_scope": get_auto_scope(data_dir, aid),
         })
     return out
 
 
 def update_settings(data_dir: Path, account_id: str = DEFAULT_ACCOUNT_ID, **fields) -> dict:
-    """更新账户设置 (涨跌停排队 / 费用三参数); 未知字段忽略。返回更新后账户。
+    """更新账户设置 (涨跌停排队 / 费用三参数 / 自动跟单范围); 未知字段忽略。
 
     费用只影响之后的新成交 (与回测费用模型同口径), 已有台账不重算。
     """
+    if fields.get("auto_scope") is not None:
+        fields["auto_scope"] = validate_auto_scope(fields["auto_scope"])
     with PAPER_LOCK:
         acc = get_account(data_dir, account_id)
         if acc is None:
             raise ValueError("尚未创建模拟账户")
         if "queue_limit_orders" in fields and fields["queue_limit_orders"] is not None:
             acc["queue_limit_orders"] = bool(fields["queue_limit_orders"])
+        if "auto_scope" in fields and fields["auto_scope"] is not None:
+            acc["auto_scope"] = fields["auto_scope"]
         for key, lo, hi in (
             ("commission_pct", 0.0, 0.01),    # 佣金率 ≤1% (100‱)
             ("stamp_tax_pct", 0.0, 0.05),     # 印花税 ≤5% (仅卖出)
