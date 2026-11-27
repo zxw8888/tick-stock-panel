@@ -53,7 +53,9 @@ def app_env(tmp_path, monkeypatch):
 
 
 def finished(store, jid):
-    deadline = time.monotonic() + 3
+    # 修复扫描在 Windows 上要等并发读锁释放: replace_with_retry 最长退避 5s,
+    # 3s 的旧上限会把正常重试误判成"任务没跑完"。
+    deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
         job = store.get(jid)
         if job["status"] in ("succeeded", "failed"):

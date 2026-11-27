@@ -17,7 +17,7 @@ from pathlib import Path
 ROOT = Path(r"D:\TSP\tick-stock-panel")
 PY = ROOT / "backend" / ".venv" / "Scripts" / "python.exe"
 DIST = ROOT / "dist" / "TSP"
-OUT_ZIP = Path(r"D:\TSP\TSP_LOF_20261125.zip")
+OUT_ZIP = Path(r"D:\TSP\TSP_StrategyDialog_20261127.zip")
 
 
 def clean_env() -> dict[str, str]:

@@ -152,7 +152,12 @@ def test_digest_revision_version_and_compatibility_guards(tmp_path):
         store.install(future, preview["digest"], preview["revision"])
 
 
-@pytest.mark.parametrize("name", ["../escape.py", "/tmp/evil.py", "a\\evil.py", "a/../x.py", "CON.py", "x.dll", "backend/extension.py/child.py"])
+@pytest.mark.parametrize("name", [
+    "../escape.py", "/tmp/evil.py",
+    pytest.param("a\\evil.py", marks=pytest.mark.skipif(
+        os.name == "nt", reason="Windows 的 zipfile 把条目名中的 \\ 规范化为 /, 构造不出该条目")),
+    "a/../x.py", "CON.py", "x.dll", "backend/extension.py/child.py",
+])
 def test_invalid_archive_paths_and_payloads_are_rejected(tmp_path, name):
     with pytest.raises(ValueError):
         ExtensionPackageStore(tmp_path).inspect(bundle(extra={name: "pass"}))

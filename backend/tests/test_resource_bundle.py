@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import stat
 import zipfile
 from pathlib import Path
@@ -235,7 +236,7 @@ def test_write_failure_rolls_back_the_entire_selected_batch(env, tmp_path, monke
     monkeypatch.setattr(resource_bundle.config_backup, "_write_payload", fail_signal)
     with pytest.raises(resource_bundle.ResourceBundleError, match="回滚"):
         apply(blob, preview, overwrite=["factor:uf_shared"])
-    assert json.loads((dest / "user_data/custom_factors/uf_shared.json").read_text()) == original
+    assert json.loads((dest / "user_data/custom_factors/uf_shared.json").read_text(encoding="utf-8")) == original
     assert not (dest / "strategies/custom/custom_a.py").exists()
     assert not (dest / "user_data/custom_signals/shared.json").exists()
 
@@ -330,7 +331,11 @@ def test_plain_zip_can_supply_dependencies_for_separately_uploaded_strategy(env,
     assert result["imported"] == 3
 
 
-@pytest.mark.parametrize("name", ["../策略.py", "/策略.py", "包/../策略.py", "包\\策略.py"])
+@pytest.mark.parametrize("name", [
+    "../策略.py", "/策略.py", "包/../策略.py",
+    pytest.param("包\\策略.py", marks=pytest.mark.skipif(
+        os.name == "nt", reason="Windows 的 zipfile 把条目名中的 \\ 规范化为 /, 构造不出该条目")),
+])
 def test_plain_zip_rejects_unsafe_paths(env, name):
     with pytest.raises(resource_bundle.ResourceBundleError, match=r"路径|条目"):
         inspect(loose_zip({name: strategy("custom_a").encode()}))
