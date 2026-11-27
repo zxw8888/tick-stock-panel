@@ -88,6 +88,7 @@ datas += [
     (str(ROOT / "backend" / "app" / "plugins" / "fuyao" / "plugin.yaml"), "app/plugins/fuyao"),
     (str(ROOT / "backend" / "app" / "plugins" / "tdxquant" / "plugin.yaml"), "app/plugins/tdxquant"),
     (str(ROOT / "backend" / "app" / "plugins" / "freetdx" / "plugin.yaml"), "app/plugins/freetdx"),
+    (str(ROOT / "backend" / "app" / "plugins" / "weisoft" / "plugin.yaml"), "app/plugins/weisoft"),
     # python 型插件的依赖清单: install_plugin 会读插件目录下的 requirements.txt,
     # 缺了会报 "Python 型插件需要 requirements.txt" (即使依赖已随主程序装好)。
     (str(ROOT / "backend" / "app" / "plugins" / "tdxquant" / "requirements.txt"), "app/plugins/tdxquant"),
@@ -101,6 +102,11 @@ hiddenimports += [
     "app.plugins.tdxquant.probe",
     "app.plugins.freetdx.provider",
     "app.plugins.freetdx.client",
+    "app.plugins.weisoft",
+    "app.plugins.weisoft.provider",
+    "app.plugins.weisoft.datfile",
+    "app.plugins.weisoft.names",
+    "app.plugins.weisoft.sync",
 ]
 
 # pytdx (freetdx 插件依赖) — 纯 Python, 但部分模块按字符串动态导入, 全量收集

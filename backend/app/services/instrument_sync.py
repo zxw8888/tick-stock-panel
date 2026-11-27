@@ -131,7 +131,18 @@ def sync_instruments(data_dir: Path) -> int:
 
     all_rows = _fetch_instruments_via_provider()
     incomplete: set[str] = set()
-    if all_rows is None:
+    if all_rows is not None:
+        # provider 可能只覆盖部分交易所 (金字塔只有 SH/SZ, 没有北交所)。
+        # 未覆盖的交易所必须按「不完整」处理, 否则会把 BJ 356 只从维表里抹掉。
+        covered = {str(r.get("exchange") or "").upper() for r in all_rows}
+        missing = {ex for ex in _EXCHANGES if ex not in covered}
+        if missing and prev_counts:
+            incomplete |= missing
+            logger.info(
+                "instruments provider 未覆盖交易所 %s, 保留历史行",
+                ",".join(sorted(missing)),
+            )
+    else:
         # 未命中非 tickflow provider → 走 tickflow 直连
         tf = get_client()
         # 免费接口的限价来自历史行情，不能盖上同步日期当作当日权威价。

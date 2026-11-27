@@ -1,0 +1,40 @@
+# weisoft — 金字塔决策交易系统(WinStock)数据源
+#
+# 直读金字塔安装目录下的 Data\<市场>\<周期>\<代码> 私有二进制文件,
+# 并提供官方 FileData 服务器的在线包同步 (下载 → 解包 → 合并)。
+#
+# 数据深度 (2026-11 实测服务器包分布):
+#   Day   1990-12-19 起 (2024-07-01 全量包) / 此后每日增量
+#   Min1  2010-01-04 起, 每日一包
+#   Min5  2000-01-04 起, 每日一包
+#
+# 未声明 realtime / depth5 / financial / adj_factor:
+# 金字塔本地文件不含这些数据, 自动回退 TickFlow。
+
+name: weisoft
+display_name: "金字塔 (WinStock)"
+runtime: none
+entry: app.plugins.weisoft.provider:WeisoftProvider
+check: app.plugins.weisoft.provider:availability
+datasets: [daily, minute]
+description: |
+  直读**金字塔决策交易系统**本地行情库, 并提供官方服务器的在线包同步。
+
+  **无需金字塔运行**, 也无需登录: 数据是磁盘上的独立二进制文件, 直接解析。
+
+  数据深度 (实测): 日K 可回溯到 **1990-12-19**(全量包), 1分钟K 到 **2010-01-04**,
+  5分钟K 到 **2000-01-04**。
+
+  单位口径: 金字塔成交量**本身就是「手」**, 与契约一致, 直接透传 (不要除 100)。
+  OHLC 为不复权原始价, 复权由本地 adj_factor 管道处理。
+
+  未接入实时行情、五档盘口、财务数据与除权因子 (金字塔本地文件不含), 自动回退 TickFlow。
+usage_notes:
+  - "日K: 全市场约 4500(SH) + 4900(SZ) 个标的, 单文件最深 8771 根 (1990 至今)"
+  - "分钟K: 单文件硬上限 60001 根 (金字塔限制), 1分钟约 1 年 / 5分钟约 5 年"
+  - "同步: 每日包约 180KB(日K) / 15MB(1分钟), 全量包 295MB(SH) + 348MB(SZ)"
+  - "金字塔 GUI「数据补充」下载的包会留在 DataCache, 同步时优先复用, 可全程零网络"
+  - "需要在设置页或环境变量 WEISOFT_DATA_ROOT 指定金字塔 Data 目录"
+install_hint: "无需安装依赖; 只需配置金字塔 Data 目录路径 (环境变量 WEISOFT_DATA_ROOT)"
+homepage: "https://www.weistock.com"
+homepage_label: "金字塔官网"

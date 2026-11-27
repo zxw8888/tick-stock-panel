@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { ExtensionSlot } from '@/extensions/ExtensionSlot'
+import { WeisoftSyncPanel } from '@/components/data/WeisoftSyncPanel'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
@@ -1037,6 +1038,8 @@ function PluginDetail({ plugin, isActive, matrixCaps, servingSet, refresh }: {
       </div>
 
       <ExtensionSlot name="settings.data-sources.detail-actions" context={{ plugin, refresh }} />
+
+      {plugin.name === 'weisoft' && <WeisoftSyncPanel />}
 
       {/* 主体: 操作 + Key 配置 (左) | 能力适配表 (右), 布局对齐 TickFlow 详情 */}
       <div className="mt-5 pt-5 border-t border-border grid grid-cols-1 lg:grid-cols-[1fr_1.15fr] gap-6 items-start">

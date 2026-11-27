@@ -2465,6 +2465,50 @@ export interface DataSourceTestResult {
   preview: Record<string, unknown>[]
 }
 
+/** 金字塔 (WinStock) 数据源状态: 本地数据概览 + DataCache 概况 */
+export interface WeisoftStatus {
+  configured: boolean
+  data_root?: string
+  server?: string
+  markets?: string[]
+  periods?: Record<string, Record<string, number>>
+  cache?: Record<string, Record<string, {
+    packages: number
+    bytes: number
+    first: string
+    last: string
+  }>>
+  capabilities?: Record<string, boolean>
+  hint?: string
+}
+
+export interface WeisoftProbePackage {
+  market: string
+  period: string
+  status: number
+  bytes: number
+  error?: string
+}
+
+export interface WeisoftProbeResult {
+  ymd: string
+  server: string
+  packages: WeisoftProbePackage[]
+}
+
+export interface WeisoftSyncResult {
+  ymd: string
+  market: string
+  period: string
+  found: boolean
+  dry_run?: boolean
+  message?: string
+  symbols?: number
+  added?: number
+  replaced?: number
+  details?: { code: string; before: number; after: number; added: number; replaced: number }[]
+}
+
 /** 插件 Key 保存结果 (先探后存: 无效 Key 返回 ok=false 且不落盘) */
 export interface PluginKeyResult {
   ok: boolean
@@ -3285,6 +3329,26 @@ export const api = {
     }),
   clearEastmoneyCookie: () =>
     request<EastmoneyCookieResult>('/api/settings/eastmoney-cookie', { method: 'DELETE' }),
+  // ── 金字塔 (WinStock) 数据源: 在线包同步 ─────────────────────────
+  weisoftStatus: () => request<WeisoftStatus>('/api/weisoft/status'),
+  weisoftProbe: (ymd: string) =>
+    request<WeisoftProbeResult>(`/api/weisoft/probe?ymd=${encodeURIComponent(ymd)}`, {
+      timeoutMs: 120_000,
+    }),
+  weisoftSync: (body: {
+    market: 'SH' | 'SZ' | 'BJ'
+    period: 'Day' | 'Min1' | 'Min5'
+    ymd: string
+    codes?: string[]
+    dry_run?: boolean
+    use_cache?: boolean
+  }) =>
+    request<WeisoftSyncResult>('/api/weisoft/sync', {
+      method: 'POST',
+      body: JSON.stringify(body),
+      // 单日全市场: 缓存命中 ~7s, 联网兜底可能数分钟
+      timeoutMs: 600_000,
+    }),
   testDataSource: (
     provider: string,
     dataset: string,

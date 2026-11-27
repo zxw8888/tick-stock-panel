@@ -404,6 +404,153 @@ Fuyao 股票批量历史日K固定请求 `interval=1d&adjust=none`，并核对�
 
 除权事件也在原生 `get_cw_data` 响应上执行上述检查：SDK 1.2.2 的 `get_divid_factors` 会将服务端失败与正常无事件都转换为空 DataFrame，不能用 DataFrame 是否为空判断请求成功。插件按 SDK 的 `Date/Type/Value` 契约解析事件，保留每 10 股单位及闭区间日期筛选；正常无事件返回空列表，事件或配价请求失败则中止本轮、保留原有因子文件，并向任务层及数据源试拉返回明确错误。
 
+## 金字塔 (WinStock) 数据源
+
+`backend/app/plugins/weisoft/` 直读**金字塔决策交易系统**本地行情库, 并可选地
+从官方 FileData 服务器补齐历史。**不需要金字塔运行**, 也不需要登录 —— 数据是
+磁盘上的独立二进制文件。
+
+### 数据深度 (2026-11 实测服务器包分布)
+
+| 周期 | 目录 | 本地上限 | 服务器可补到 |
+| --- | --- | --- | --- |
+| 日K | `Day` | 单文件 8771 根 (1990 至今) | 1990-12-19 (靠 `20240701` 全量包) |
+| 1 分钟 | `Min1` | 单文件硬上限 60001 根 (约 1 年) | 2010-01-04 |
+| 5 分钟 | `Min5` | 单文件硬上限 60001 根 (约 5 年) | 2000-01-04 |
+
+分钟线 60001 是金字塔自己的文件上限, 不是插件限制: 超过后旧 bar 被丢弃。
+
+### 配置
+
+只有一个配置项 —— 金字塔 `Data` 目录:
+
+```powershell
+$env:WEISOFT_DATA_ROOT = "D:\software\Weisoft Stock(x64)\Data"
+```
+
+也可以写进 `data/user_data/secrets.json` 的 `weisoft_data_root` 字段 (优先级高于
+环境变量)。未配置时按 `D:\software\Weisoft Stock(x64)\Data` 等常见路径兜底探测。
+
+服务器地址可用 `WEISOFT_FILE_SERVER` 覆盖, 默认 `210.14.65.73:7170`。
+
+### 单位与代码格式
+
+| 项 | 金字塔 | TSP 契约 | 处理 |
+| --- | --- | --- | --- |
+| `volume` | **手** | 手 | 直接透传 |
+| `amount` | 元 | 元 | 直接透传 |
+| OHLC | 不复权原始价 | 不复权原始价 | 直接透传 |
+| 代码 | `SH510300` | `510300.SH` | 加/去交易所后缀 |
+
+> `volume` 的口径容易搞错。金字塔存的**已经是手**, 不要再除 100。
+> 自验方法: `amount ÷ volume ÷ close ≈ 100` 说明 volume 是手
+> (实测 600000.SH: 761,740,928 ÷ 717,580 ÷ 10.67 = 99.49)。
+
+### 同步 (把历史往前补)
+
+本地 `.dat` 有多少只能读多少; 要拿到更早的历史必须走同步:
+
+```text
+GET  /api/weisoft/status           配置 + 本地概览 + DataCache 概况
+GET  /api/weisoft/probe?ymd=...    探测某天服务器上有哪些包 (不下载正文)
+POST /api/weisoft/sync             同步单日
+POST /api/weisoft/sync-range       同步日期区间
+```
+
+设置页 **数据源 → 金字塔 (WinStock) 详情卡** 内置「在线包同步」面板: 选日期 /
+市场 / 周期后可直接「探测」「演练」「同步」, 并显示本地文件数与 DataCache 概况。
+
+批量补齐用 CLI:
+
+```bash
+cd backend
+# 看配置和缓存
+python scripts/weisoft_bulk_sync.py --status
+# 用金字塔自己下载过的缓存包补日K (零网络)
+python scripts/weisoft_bulk_sync.py --from-cache --market SH --period Day
+# 拉全量包, 日K 一次补到 1990
+python scripts/weisoft_bulk_sync.py --full --market SH --period Day
+# 区间增量
+python scripts/weisoft_bulk_sync.py --range 20261101 20261125 --period Min1
+```
+
+同步优先读 `<安装目录>/DataCache/<市场>/<周期>/<日期>.zip` —— 这是金字塔 GUI
+「数据补充」自己留下的缓存, 有缓存时完全不需要联网。
+
+合并是「按 OLE 日期去重 + 升序」, 同日期以新数据为准, 重复执行幂等。
+
+### 在线包格式 (顺序解析, 不能用正则)
+
+```text
+[0..3]    int32   头长度 (实测 100, 但不是首品种偏移)
+[4..53]   GBK     版本横幅 "金字塔决策交易系统(x64) 2025 (V7.20)"
+[54..]    品种串联:
+    char[8]  代码 (SH000001 / SHZS8196 …)
+    uint32   保留 (0)
+    uint32   记录数 N
+    N × 50   记录区 (与本地 .dat 记录同格式)
+```
+
+必须顺序解析。全量包里有 `SHZS2000` 这类自编指数代码, 正则漏掉它们会让前一个
+品种的记录区被错误延伸到下一个可识别代码 —— 实测 `20240701` 包里 `SH900957`
+因此吞掉 26.8MB (本该 287,850 字节)。
+
+### 未声明 realtime / depth5 / financial / adj_factor
+
+金字塔本地文件不含这些数据, 声明了只会给出错误结果。插件只声明 `daily` 与
+`minute`, 其余能力由 `provider_has_dataset` 返回 False, 框架自动回退 TickFlow。
+复权由本地 `adj_factor` 管道处理, 插件不做任何复权。
+
+### 品种分类: 只认代码段白名单, 禁止「兜底当股票」
+
+金字塔行情目录里 `Day` 下有 4496(SH) / 4831(SZ) 个文件, 混着股票、ETF、LOF、
+国债、逆回购、REITs、B 股。**文件名不带类型**, 只能按代码段推断。这里必须用
+白名单: 早期版本用「不是别的就当股票」的兜底, 实测把 344 个 SH 债券 + 116 个
+SH 杂项、332 个 SZ 债券 + 43 个 SZ 杂项全部塞进股票池, 换手率、市值、回测全部
+被污染。
+
+| 市场 | 类型 | 代码段 |
+| --- | --- | --- |
+| SH | stock | `600 601 603 605 688 689` |
+| SZ | stock | `000 001 002 003 300 301 302` |
+| BJ | stock | `43x 83x 87x 92x` |
+| SH | index | `000`、`880-889` |
+| SH | etf | `50 51 52 53 55 56 58` |
+| SH | lof | `501 502 505 506` |
+| SH | bond | `01 02 11 12 13 20` |
+| SH | other | `508`(REITs)、`90x`(B 股) |
+| SZ | index | `399 980 988` |
+| SZ | etf | `158 159` |
+| SZ | lof | `16x` |
+| SZ | bond | `10 11 12 13` |
+| SZ | other | `18x`(REITs)、`20x`(B 股) |
+| 任意 | index | `ZS` 前缀(自编指数) |
+| 任意 | other | 非 6 位文件名(如 `510300.bak`) |
+
+`get_instruments(asset_type)` 会再用 `app.asset_types.ASSET_TYPES` 校验一次,
+传入 `bond` / `other` / 空串直接返回 `[]`, 不把非目标类型泄漏给同步管道。
+
+实测分布: `stock 5370 / index 962 / etf 1747 / lof 413 / bond 676 / other 159`。
+
+### 名称回落链 (4 层)
+
+金字塔没有单一「完整品种表」, 名称分散在两个互不覆盖的文件里:
+
+1. `Setting\<市场>_Static_Market.dat` —— 每日更新, 但只有 A 股股票;
+2. `Data\<市场>\REPORT2_64.DAT` —— 2015 年安装快照, 含指数/ETF/B 股, 没有
+   `588000` / `688981` 这类新标的;
+3. TSP 本地 parquet 维表 `instruments*.parquet` —— 只读、不联网, 按 mtime
+   签名缓存, 补上 ETF/LOF/指数名称;
+4. 仍查不到时回落成 symbol 本身(如 `588000.SH`), 不伪造名称。
+
+实测覆盖率: `stock 100% / etf 98.6% / index 67.3% / lof 42.4%`。
+
+### 同步不会抹掉未覆盖的交易所
+
+金字塔只有 SH/SZ, 没有北交所。`services/instrument_sync.py` 在 provider 返回
+的行缺少某个交易所时, 会把该所标记为「不完整」并保留历史行, 避免一次同步把
+356 只 BJ 标的从维表里删掉。
+
 ## 路由机制(无需关心, 仅参考)
 
 后端启动时, `loader.py` 扫描 `plugins/` 目录:

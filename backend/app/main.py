@@ -52,6 +52,7 @@ from app.api import (
     strategy_recommended,
     task_registry,
     watchlist,
+    weisoft_sync,
 )
 from app.api import auth as auth_api
 from app.api import settings as settings_api
@@ -771,6 +772,7 @@ app.include_router(alerts.router)
 app.include_router(events.router)
 app.include_router(rps.router)
 app.include_router(sector_rotation.router)
+app.include_router(weisoft_sync.router)
 
 # 二次开发路由与小粒度策略在所有核心路由后注册, 禁止覆盖核心路径。
 extension_registry, extension_load_errors = configure_backend_extensions(app)
