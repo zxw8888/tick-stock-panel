@@ -127,6 +127,10 @@ export function RecommendedStrategiesDialog({ open, onClose, onInstalled }: Prop
   })
   const allVisibleSelected = visible.length > 0 && visible.every(item => !actionable(item) || selected.has(item.id))
 
+  // 关闭时必须真正卸载：Modal 的遮罩是 fixed inset-0 z-50，常驻会吞掉整页点击，
+  // 且仅把 open 置 false 并不会让弹窗消失（查询数据仍在缓存里），表现为"关不掉"。
+  if (!open) return null
+
   return (
     <>
       <Modal

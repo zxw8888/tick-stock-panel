@@ -148,7 +148,10 @@ def _partition_problem(
                     unknown_symbols |= any(s is None or not s.strip() for s in values)
                     symbols.update(s for s in values if s and s.strip())
         except Exception as exc:  # noqa: BLE001 — 单文件失败记录为检查问题, 继续检查其他文件
-            logger.warning("日K文件检查失败 %s: %s", path, exc)
+            # 只记录字符串: LogRecord.args 若持有异常对象, 会经 __traceback__ 保留
+            # pyarrow 的内部帧, 损坏文件的句柄随之一直开着 (pytest 日志捕获场景下
+            # 实测), 之后的日K修补 replace 会被这个句柄挡死。
+            logger.warning("日K文件检查失败 %s: %s", path, str(exc))
             bad.append(path.name)
             reasons.append("日K文件损坏或无法读取")
             kind = "corrupt"

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import os
 import threading
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
@@ -187,7 +188,12 @@ def test_pending_replacement_preview_rejects_stale_install_state(isolated):
     assert current["pending_version"] == "2.0.0"
 
 
-@pytest.mark.parametrize("filename", ["../escape.py", "/escape.py", "a\\b.py", "a/../b.py", "CON.py", "client.PY", "x.dll", "a./b.py"])
+@pytest.mark.parametrize("filename", [
+    "../escape.py", "/escape.py",
+    pytest.param("a\\b.py", marks=pytest.mark.skipif(
+        os.name == "nt", reason="Windows 的 zipfile 把条目名中的 \\ 规范化为 /, 构造不出该条目")),
+    "a/../b.py", "CON.py", "client.PY", "x.dll", "a./b.py",
+])
 def test_archive_paths_and_payload_limits(isolated, filename):
     with pytest.raises(ValueError):
         packages.inspect_archive(bundle(extra={filename: "pass"}))

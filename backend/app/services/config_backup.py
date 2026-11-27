@@ -26,7 +26,6 @@ from zoneinfo import ZoneInfo
 
 import yaml
 
-from app.services.fs_utils import atomic_write_text
 
 logger = logging.getLogger(__name__)
 
@@ -618,7 +617,12 @@ def _validate_payload(entry: _Entry, payload: bytes) -> None:
 
 
 def _write_bytes_atomic(target: Path, payload: bytes) -> None:
-    """二进制原子写: tmp + replace, 与 fs_utils.atomic_write_text 同语义。"""
+    """字节原子写: tmp + replace, 与 fs_utils.atomic_write_text 同语义。
+
+    文本文件也走这里: 文本模式写入会在 Windows 上把备份里的 CRLF 再转一次
+    (\\r\\n -> \\r\\r\\n), 恢复出来的策略文件比导出时多一份回车。备份语义是
+    原样还原, 统一按字节落盘。
+    """
     from app.tickflow.repository import replace_with_retry
 
     tmp = target.with_name(target.name + ".tmp")
@@ -626,16 +630,9 @@ def _write_bytes_atomic(target: Path, payload: bytes) -> None:
     replace_with_retry(tmp, target)
 
 
-# 文本类后缀走 atomic_write_text; 其余 (parquet/音频等二进制) 走字节原子写。
-_TEXT_SUFFIXES = frozenset({".py", ".json", ".jsonl", ".yaml", ".yml", ".js"})
-
-
 def _write_payload(target: Path, payload: bytes) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
-    if target.suffix.lower() in _TEXT_SUFFIXES:
-        atomic_write_text(target, payload.decode("utf-8"))
-    else:
-        _write_bytes_atomic(target, payload)
+    _write_bytes_atomic(target, payload)
 
 
 def apply_archive(data: bytes, *, allow_overwrite: bool = False, categories: Iterable[str] | None = None) -> dict[str, Any]:

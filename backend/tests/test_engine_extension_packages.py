@@ -2,6 +2,7 @@ import base64
 import hashlib
 import json
 import shlex
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -521,6 +522,10 @@ PyMODINIT_FUNC PyInit_tivelo_fixture(void) { return PyModule_Create(&module); }
     return target
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32" and shutil.which("cl") is None,
+    reason="需要 MSVC cl.exe (VS 开发者环境) 才能编译真实原生探针",
+)
 def test_real_native_activation_update_failed_probe_previous_version_and_disable(
     client, release, tmp_path  # noqa: F811
 ):

@@ -12,7 +12,8 @@ from pathlib import Path
 from typing import Any
 
 _MAX_RANGE_GENERATIONS = 128
-ASSET_LABELS = {"stock": "股票", "etf": "ETF", "index": "指数"}
+# Fork extension: LOF is a first-class asset type in this panel.
+ASSET_LABELS = {"stock": "股票", "etf": "ETF", "index": "指数", "lof": "LOF"}
 
 
 class EnrichedGenerationUnavailableError(RuntimeError):

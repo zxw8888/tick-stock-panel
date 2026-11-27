@@ -53,7 +53,7 @@ const render = async (extra: Partial<Parameters<typeof StockDailyKChart>[0]> = {
 it('moves volume comparison controls out of the custom daily toolbar while preserving legacy callers and preferences', async () => {
   localStorage.setItem('stock_volume_compare', JSON.stringify({ enabled: false, days: 7 }))
   await render({ customIndicators: true })
-  expect([...host.querySelectorAll('button[aria-pressed]')].map(button => button.textContent)).toEqual(['异动'])
+  expect([...host.querySelectorAll('button[aria-pressed]')].map(button => button.textContent)).toEqual(['形态', '异动', '筹码'])
   expect(host.querySelector('[aria-label="开启量能对比"]')).toBeNull()
   expect(host.querySelector('[aria-label="量能对比周期"]')).toBeNull()
   expect(props().volumeCompare).toBeUndefined()

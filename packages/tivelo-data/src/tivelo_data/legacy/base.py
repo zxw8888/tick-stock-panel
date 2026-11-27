@@ -14,7 +14,8 @@ from typing import Literal, Protocol
 
 import polars as pl
 
-AssetType = Literal["stock", "index", "etf"]
+# Fork extension: LOF is a first-class asset type in this panel.
+AssetType = Literal["stock", "index", "etf", "lof"]
 
 
 class ProviderRequestError(RuntimeError):
